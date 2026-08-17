@@ -1,4 +1,5 @@
 const path = require('path');
+const { version: appVersion } = require('./package.json');
 const { PHASE_DEVELOPMENT_SERVER } = require('next/constants');
 const tiptapPmResolveBase = path.dirname(require.resolve('@tiptap/pm/model'));
 const resolveFromTiptapPm = (pkg) =>
@@ -6,6 +7,9 @@ const resolveFromTiptapPm = (pkg) =>
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  env: {
+    NEXT_PUBLIC_APP_VERSION: appVersion,
+  },
   reactStrictMode: false, // Disabled for BlockNote compatibility
   output: 'export',
   images: {

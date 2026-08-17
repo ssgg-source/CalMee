@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 export function About() {
-    const [currentVersion, setCurrentVersion] = useState('0.4.0');
+    const [currentVersion, setCurrentVersion] = useState(process.env.NEXT_PUBLIC_APP_VERSION ?? 'development');
     const { t } = useLanguage();
 
     useEffect(() => {

@@ -28,6 +28,7 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: node scripts/version.mjs --check
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit --incremental false
       - run: pnpm run build

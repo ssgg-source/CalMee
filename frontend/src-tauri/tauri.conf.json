@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "CalMee",
-    "version": "0.4.0",
+    "version": "0.1.0-alpha.1",
     "identifier": "com.calmee.app",
     "build": {
         "frontendDist": "../out",
