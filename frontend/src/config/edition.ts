@@ -1,9 +1,9 @@
 export const CALMEE_EDITION = 'community' as const;
 
 /**
- * The public composition root exposes only community product capabilities.
- * CalMee Pro supplies a separate private capability registry; shared components
- * must depend on this shape rather than importing Pro implementations.
+ * The public composition root exposes the capabilities available in this build.
+ * Shared components depend on this shape so unfinished integrations stay out of
+ * the user interface until they are ready.
  */
 export const editionCapabilities = {
   commercialNoteConnectors: false,

@@ -35,8 +35,7 @@ export function PersonDetailView({personId,onBack}:{personId:string;onBack:()=>v
   const {locale}=useLanguage();
   const zh=locale==="zh-CN";
   const [detail,setDetail]=useState<PersonDetail|null>(null);
-  // The first public alpha keeps auditable identity and voiceprint management,
-  // while long-term AI person profiling remains a CalMee Pro capability.
+  // The first public alpha defaults to auditable identity and voiceprint management.
   const [tab,setTab]=useState<DetailTab>("voiceprints");
   const [aliases,setAliases]=useState("");
   const [notes,setNotes]=useState("");

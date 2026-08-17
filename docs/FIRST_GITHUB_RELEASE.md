@@ -61,53 +61,7 @@ Create GitHub release notes that clearly state supported platforms, known defect
 privacy boundaries, and that no model weights are bundled. A source tag is enough
 for the first alpha; a DMG can follow after signing and clean-machine testing.
 
-## 6. Create the private Pro repository
-
-Create an empty private repository named `calmee-pro`. Copy or clone the public
-repository into a separate local directory, then configure:
-
-```bash
-git remote rename origin upstream
-git remote add origin git@github.com:<owner>/calmee-pro.git
-git push -u origin main
-```
-
-In the Pro repository, `origin` is private and `upstream` points to public CalMee.
-Never push a Pro branch or Pro tag to `upstream`.
-
-## 7. Synchronize Community into Pro
-
-For every shared release:
-
-```bash
-git fetch upstream
-git switch main
-git merge --no-ff upstream/main
-git push origin main
-```
-
-Record the public base in Pro release notes, for example:
-`CalMee Pro 0.1.0 is based on CalMee v0.1.0`.
-
-## 8. Contribution flow
-
-- Shared engine, UI, storage, security, accessibility, and bug fixes start in
-  public CalMee.
-- Pro-only services, proprietary quality assets, hosted infrastructure, and
-  commercial connectors start in the private repository.
-- If Pro needs a missing extension point, add the smallest reusable interface to
-  Community first, then implement the private adapter in Pro.
-- Never copy and independently edit a shared file in both repositories.
-
-## 9. Release rhythm
-
-- Community: small reviewed changes, public changelog, source tags, transparent
-  known issues.
-- Pro: merge Community at least weekly and before every release.
-- Both products: use compatible semantic versions and keep database migrations
-  forward-only.
-
-## 10. Before announcing broadly
+## 6. Before announcing broadly
 
 Complete every item in `OPEN_SOURCE_RELEASE_CHECKLIST.md`, test on a clean Mac user
 account, verify microphone and system-audio permissions, download every promoted

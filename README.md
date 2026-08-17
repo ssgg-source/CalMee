@@ -25,17 +25,8 @@ meeting documents with a local model or their own API credentials.
 - Meeting dashboard, search, tags, calendar linking, and local data management
 - English and Simplified Chinese interfaces
 
-The exact edition boundary is documented in
-[docs/EDITION_BOUNDARIES.md](./docs/EDITION_BOUNDARIES.md).
-
-## CalMee Pro
-
-CalMee Pro is a separate product built on the same open-source foundation. The
-open repository remains the canonical home of shared code. Pro-specific code is
-kept in a private repository and integrated through explicit extension points,
-rather than by copying the community source.
-
-See [docs/DUAL_REPOSITORY_WORKFLOW.md](./docs/DUAL_REPOSITORY_WORKFLOW.md).
+The current public-alpha scope is documented in
+[docs/PROJECT_SCOPE.md](./docs/PROJECT_SCOPE.md).
 
 ## Privacy
 

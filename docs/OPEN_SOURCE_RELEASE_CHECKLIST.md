@@ -7,7 +7,7 @@
 - [ ] Search the tree and history for keys, tokens, passwords, private URLs, signing
       material, email addresses, and customer data
 - [ ] Confirm that every committed file is intended to be MIT-licensed and public
-- [ ] Remove dormant Pro implementations, not only their navigation buttons
+- [ ] Remove dormant private or unreleased implementations, not only their navigation buttons
 - [ ] Replace development-only identifiers and repository URLs
 
 ## Licenses and third parties
