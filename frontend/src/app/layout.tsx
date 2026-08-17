@@ -29,6 +29,11 @@ import { usePathname } from 'next/navigation'
 import { appCacheDir, join } from '@tauri-apps/api/path'
 import { mkdir, writeFile } from '@tauri-apps/plugin-fs'
 
+type DatabaseStartupStatus =
+  | { status: 'initializing' }
+  | { status: 'ready' }
+  | { status: 'failed'; message: string };
+
 
 // WKWebView may retain a development webpack runtime while Tauri restarts the
 // native process. Register recovery in the server-rendered <head>, before any
@@ -100,6 +105,40 @@ function AppFrame({ children }: { children: React.ReactNode }) {
   )
 }
 
+function DatabaseStartupScreen({ status }: { status: DatabaseStartupStatus }) {
+  const failed = status.status === 'failed';
+  return (
+    <main className="flex h-screen items-center justify-center bg-[#f8f7fb] px-6 text-slate-900">
+      <section className="w-full max-w-xl rounded-3xl border border-violet-100 bg-white p-8 shadow-sm">
+        <p className="text-sm font-medium text-violet-600">CalMee</p>
+        <h1 className="mt-2 text-2xl font-semibold">
+          {failed ? '无法打开本地数据' : '正在准备本地数据…'}
+        </h1>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          {failed
+            ? 'CalMee 没有进入功能页面，以避免在数据库未就绪时产生误导性错误。你的原数据库没有被修改。'
+            : '首次启动会在开源版专属目录中创建全新的公共数据库。'}
+        </p>
+        {failed && (
+          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="text-xs font-semibold text-red-700">启动详情</p>
+            <p className="mt-2 break-words font-mono text-xs leading-5 text-red-700">{status.message}</p>
+          </div>
+        )}
+        {failed && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-6 h-10 rounded-xl bg-violet-600 px-5 text-sm font-medium text-white hover:bg-violet-700"
+          >
+            重新尝试
+          </button>
+        )}
+      </section>
+    </main>
+  );
+}
+
 // export { metadata } from './metadata'
 
 export default function RootLayout({
@@ -109,12 +148,33 @@ export default function RootLayout({
 }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
+  const [databaseStartup, setDatabaseStartup] = useState<DatabaseStartupStatus>({ status: 'initializing' })
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [importFilePath, setImportFilePath] = useState<string | null>(null)
   const [importRecordedAt, setImportRecordedAt] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const check = async () => {
+      try {
+        const status = await invoke<DatabaseStartupStatus>('get_database_startup_status');
+        if (cancelled) return;
+        setDatabaseStartup(status);
+        if (status.status === 'initializing') timer = window.setTimeout(check, 250);
+      } catch (error) {
+        if (!cancelled) setDatabaseStartup({ status: 'failed', message: String(error) });
+      }
+    };
+    void check();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [])
 
   useEffect(() => {
     // A stable render proves the new webpack graph loaded successfully. Clear
@@ -313,7 +373,9 @@ export default function RootLayout({
       <head><script dangerouslySetInnerHTML={{ __html: chunkRecoveryScript }} /></head>
       <body className="font-sans antialiased">
         <LanguageProvider>
-          <RecordingStateProvider>
+          {databaseStartup.status !== 'ready' ? (
+            <DatabaseStartupScreen status={databaseStartup} />
+          ) : <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
                 <OllamaDownloadProvider>
@@ -351,7 +413,7 @@ export default function RootLayout({
                 </OllamaDownloadProvider>
               </ConfigProvider>
             </TranscriptProvider>
-          </RecordingStateProvider>
+          </RecordingStateProvider>}
         </LanguageProvider>
 
         <Toaster position="bottom-center" richColors closeButton />

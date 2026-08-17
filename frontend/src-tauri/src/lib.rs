@@ -40,6 +40,7 @@ pub mod cloud_models;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod data_import;
 pub mod funasr_engine;
 pub mod groq;
 pub mod knowledge;
@@ -63,6 +64,7 @@ use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::RwLock;
+use state::DatabaseStartupState;
 
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 
@@ -412,6 +414,7 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(
             tokio::sync::Mutex::new(None),
         )))
+        .manage(DatabaseStartupState::default())
         .setup(|_app| {
             log::info!("Application setup complete");
 
@@ -509,11 +512,14 @@ pub fn run() {
                 // can report the recoverable startup error instead of appearing as
                 // an "unexpected quit" crash.
                 log::error!("Failed to initialize database: {}", error);
+                _app.state::<DatabaseStartupState>().fail(error.clone());
                 let app_handle = _app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(750)).await;
                     let _ = app_handle.emit("database-initialization-failed", error);
                 });
+            } else {
+                _app.state::<DatabaseStartupState>().ready();
             }
 
             // Initialize bundled templates directory for dynamic template discovery
@@ -544,6 +550,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            state::get_database_startup_status,
+            data_import::api_get_default_legacy_calmee_source,
+            data_import::api_select_legacy_calmee_source,
+            data_import::api_preview_legacy_calmee_import,
+            data_import::api_import_legacy_calmee_data,
             start_recording,
             stop_recording,
             is_recording,

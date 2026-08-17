@@ -9,7 +9,7 @@ pub struct DatabaseManager {
 }
 
 impl DatabaseManager {
-    pub async fn new(tauri_db_path: &str, backend_db_path: &str) -> Result<Self> {
+    pub async fn new(tauri_db_path: &str, _backend_db_path: &str) -> Result<Self> {
         if let Some(parent_dir) = Path::new(tauri_db_path).parent() {
             if !parent_dir.exists() {
                 fs::create_dir_all(parent_dir).map_err(|e| sqlx::Error::Io(e))?;
@@ -17,17 +17,11 @@ impl DatabaseManager {
         }
 
         if !Path::new(tauri_db_path).exists() {
-            if Path::new(backend_db_path).exists() {
-                log::info!(
-                    "Copying database from {} to {}",
-                    backend_db_path,
-                    tauri_db_path
-                );
-                fs::copy(backend_db_path, tauri_db_path).map_err(|e| sqlx::Error::Io(e))?;
-            } else {
-                log::info!("Creating database at {}", tauri_db_path);
-                Sqlite::create_database(tauri_db_path).await?;
-            }
+            // Community builds never copy an existing database implicitly.
+            // Cross-edition data must go through the read-only, allowlisted
+            // importer so credentials and private-edition state cannot leak.
+            log::info!("Creating clean public database at {}", tauri_db_path);
+            Sqlite::create_database(tauri_db_path).await?;
         }
 
         let pool = SqlitePool::connect(tauri_db_path).await?;
@@ -56,7 +50,8 @@ impl DatabaseManager {
             .join("meeting_minutes.sqlite")
             .to_string_lossy()
             .to_string();
-        // Legacy backend DB path (for auto-migration if exists)
+        // Kept only for the stable constructor signature. It is never copied;
+        // legacy data is imported explicitly through the allowlisted importer.
         let backend_db_path = app_data_dir
             .join("meeting_minutes.db")
             .to_string_lossy()
@@ -130,34 +125,6 @@ impl DatabaseManager {
         let tauri_db_path = app_data_dir.join("meeting_minutes.sqlite");
 
         Ok(!tauri_db_path.exists())
-    }
-
-    /// Import a legacy database from the specified path and initialize
-    pub async fn import_legacy_database(
-        app_handle: &tauri::AppHandle,
-        legacy_db_path: &str,
-    ) -> Result<Self> {
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
-            .expect("failed to get app data dir");
-
-        if !app_data_dir.exists() {
-            fs::create_dir_all(&app_data_dir).map_err(|e| sqlx::Error::Io(e))?;
-        }
-
-        // Copy legacy database to app data directory as meeting_minutes.db
-        let target_legacy_path = app_data_dir.join("meeting_minutes.db");
-        log::info!(
-            "Copying legacy database from {} to {}",
-            legacy_db_path,
-            target_legacy_path.display()
-        );
-
-        fs::copy(legacy_db_path, &target_legacy_path).map_err(|e| sqlx::Error::Io(e))?;
-
-        // Now use the standard initialization which will detect and migrate the legacy db
-        Self::new_from_app_handle(app_handle).await
     }
 
     pub fn pool(&self) -> &SqlitePool {

@@ -26,6 +26,7 @@ export const en = {
   'settings.transcription': 'Transcription',
   'settings.summary': 'Summary',
   'settings.calendar': 'Calendar',
+  'settings.dataMigration': 'Data Migration',
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.deleting': 'Deleting…',
