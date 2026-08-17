@@ -28,6 +28,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'settings.transcription': '转写',
   'settings.summary': '总结',
   'settings.calendar': '日历',
+  'settings.dataMigration': '数据迁移',
   'common.cancel': '取消',
   'common.delete': '删除',
   'common.deleting': '正在删除…',

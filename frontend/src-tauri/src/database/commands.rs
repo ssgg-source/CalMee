@@ -141,32 +141,10 @@ pub async fn check_homebrew_database(path: String) -> Result<Option<DatabaseChec
 /// Import legacy database and initialize the database manager
 #[tauri::command]
 pub async fn import_and_initialize_database(
-    app: AppHandle,
-    legacy_db_path: String,
+    _app: AppHandle,
+    _legacy_db_path: String,
 ) -> Result<(), String> {
-    info!(
-        "Starting import of legacy database from: {}",
-        legacy_db_path
-    );
-
-    // Import and get initialized manager
-    let db_manager = DatabaseManager::import_legacy_database(&app, &legacy_db_path)
-        .await
-        .map_err(|e| {
-            error!("Failed to import legacy database: {}", e);
-            format!("Failed to import database: {}", e)
-        })?;
-
-    // Update app state with the new manager
-    app.manage(AppState { db_manager });
-
-    info!("Legacy database imported and initialized successfully");
-
-    // Emit event to notify frontend that database is ready
-    app.emit("database-initialized", ())
-        .map_err(|e| format!("Failed to emit database-initialized event: {}", e))?;
-
-    Ok(())
+    Err("Whole-database import is disabled. Use the Data Migration page to preview and import allowlisted public meeting data.".into())
 }
 
 /// Initialize a fresh database (for users who don't want to import)
