@@ -1189,6 +1189,19 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
     }
 }
 
+fn connection_test_output_tokens(provider: &crate::summary::llm_client::LLMProvider) -> u32 {
+    use crate::summary::llm_client::LLMProvider;
+
+    // MiniMax M-series models account for hidden reasoning inside the completion
+    // budget. Eight tokens can be consumed before the requested `OK` is emitted,
+    // which makes a valid API key look like a failed connection.
+    if provider == &LLMProvider::MiniMax {
+        4_096
+    } else {
+        8
+    }
+}
+
 /// Tests a configured cloud LLM with a minimal completion request.
 #[tauri::command]
 pub async fn api_test_llm_connection(
@@ -1227,7 +1240,7 @@ pub async fn api_test_llm_connection(
         "Reply with only: OK",
         None,
         None,
-        Some(8),
+        Some(connection_test_output_tokens(&parsed_provider)),
         Some(0.0),
         None,
         None,
@@ -1239,6 +1252,18 @@ pub async fn api_test_llm_connection(
         "status": "success",
         "message": format!("Connected to {} successfully", provider)
     }))
+}
+
+#[cfg(test)]
+mod llm_connection_test_tests {
+    use super::*;
+    use crate::summary::llm_client::LLMProvider;
+
+    #[test]
+    fn minimax_connection_test_reserves_hidden_reasoning_budget() {
+        assert_eq!(connection_test_output_tokens(&LLMProvider::MiniMax), 4_096);
+        assert_eq!(connection_test_output_tokens(&LLMProvider::OpenAI), 8);
+    }
 }
 
 /// Validate cloud-ASR credentials without uploading meeting audio.
