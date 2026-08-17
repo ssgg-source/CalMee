@@ -4,6 +4,7 @@
     "private": true,
     "description": "Open-source local-first meeting transcription and notes app",
     "license": "MIT",
+    "packageManager": "pnpm@11.20.0",
     "engines": {
         "node": ">=24",
         "pnpm": ">=9"
