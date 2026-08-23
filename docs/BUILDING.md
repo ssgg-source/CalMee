@@ -2,6 +2,62 @@
 
 This guide provides detailed instructions for building CalMee from source on different operating systems.
 
+The first-use runtime state machine, rollback rules, and integrity trust roots
+are specified in [FUNASR_RUNTIME_INSTALLER.md](./FUNASR_RUNTIME_INSTALLER.md).
+
+## FunASR first-use runtime
+
+Development builds use the repository-local `.venv-funasr` created by:
+
+```bash
+./scripts/setup-funasr.sh
+```
+
+Release packages must not contain `funasr-runtime`, Python, PyTorch, FunASR, or
+model weights. The first time a customer selects a local FunASR/Qwen3-ASR model,
+the app displays the runtime and model as separate layers, estimated download
+and disk sizes, destination directories, network requirements, retry behavior,
+and the third-party license location. Nothing is downloaded before confirmation.
+
+The app downloads pinned `uv` **0.11.7** from Astral's GitHub release and checks
+the platform-specific SHA-256 embedded in the Rust installer. It then installs
+managed CPython **3.11.15** and the matching
+`funasr_sidecar/locks/<target>.lock` with `--require-hashes`. The installed
+runtime manifest records Python's exact version and executable hash,
+OS/architecture, `uv` source/version/hash, requirements and lock hashes, and the
+generated license-inventory hash.
+
+Installation uses `runtimes/funasr/staging/<uuid>`. Only after dependency
+installation, license generation, manifest creation, and the sidecar self-test
+all succeed is the completed directory moved to
+`runtimes/funasr/versions/<runtime-id>` and `active.json` atomically replaced.
+The previous version is immutable and remains active after cancellation,
+offline failure, insufficient disk, bad hashes, or any validation error. A
+verified active runtime is reused offline. Downloads can be **retried**, but the
+current implementation does not claim byte-range resume.
+
+Supported runtime targets are Apple-silicon macOS, x86-64 Windows, and x86-64
+glibc Linux. PyTorch 2.11 does not publish a macOS Intel wheel, so Intel macOS is
+blocked before download.
+
+To intentionally update Python dependencies, edit the exact direct pins and
+regenerate all platform locks together:
+
+```bash
+node scripts/lock-funasr-runtime.mjs
+node scripts/check-release-boundaries.mjs
+```
+
+The lock files pin all transitive versions and allowed distribution SHA-256
+hashes. Release review must include the input and every changed lock file.
+Tauri packages only the lightweight sidecar, locks, and notice generator.
+
+Each installed runtime contains `third-party/CPYTHON-LICENSE.txt`, a generated
+`third-party/python-packages.json` inventory, copied package license/notice files
+below `third-party/licenses/`, and `third-party/NOTICE.txt`. The build fails if
+CPython's license or machine-readable license evidence for an installed package
+is missing. Model weights are excluded.
+
 <details>
 <summary>Linux</summary>
 
