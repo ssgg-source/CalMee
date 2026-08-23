@@ -35,7 +35,6 @@ export default function RecordingPage() {
   const { t, locale } = useLanguage();
   // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
-  const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
 
   // Use contexts for state management
@@ -195,22 +194,6 @@ export default function RecordingPage() {
     }
   };
 
-  useEffect(() => {
-    if (recordingState.isRecording) {
-      const interval = setInterval(() => {
-        setBarHeights(prev => {
-          const newHeights = [...prev];
-          newHeights[0] = Math.random() * 20 + 10 + 'px';
-          newHeights[1] = Math.random() * 20 + 10 + 'px';
-          newHeights[2] = Math.random() * 20 + 10 + 'px';
-          return newHeights;
-        });
-      }, 300);
-
-      return () => clearInterval(interval);
-    }
-  }, [recordingState.isRecording]);
-
   // Computed values using global status
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
@@ -274,48 +257,37 @@ export default function RecordingPage() {
           </Button>
         </div>
       </header>
-      <div className="relative flex-1 overflow-hidden p-4 pb-24">
+      <div className="relative flex-1 overflow-hidden p-4">
         <div className="grid h-full min-h-0 grid-cols-[minmax(0,1.65fr)_minmax(280px,0.75fr)] gap-4">
-          <div className="min-h-0 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-sm">
+          <div className="relative min-h-0 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-sm">
             <TranscriptPanel
               isProcessingStop={isProcessingStop}
               isStopping={isStopping}
               showModal={showModal}
             />
+            {(hasMicrophone || isRecording) &&
+              status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
+              status !== RecordingStatus.SAVING && (
+                <div className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2">
+                  <RecordingControls
+                    isRecording={recordingState.isRecording}
+                    onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+                    onRecordingStart={handleRecordingStart}
+                    onTranscriptReceived={() => { }}
+                    onStopInitiated={() => setIsStopping(true)}
+                    onTranscriptionError={(message) => {
+                      showModal('errorAlert', message);
+                    }}
+                    isRecordingDisabled={isRecordingDisabled}
+                    isParentProcessing={isProcessingStop}
+                    selectedDevices={selectedDevices}
+                    meetingName={meetingTitle}
+                  />
+                </div>
+              )}
           </div>
           <LiveMeetingNotes currentTime={recordingState.activeDuration || 0} />
         </div>
-
-        {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
-        {(hasMicrophone || isRecording) &&
-          status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-          status !== RecordingStatus.SAVING && (
-            <div className="fixed bottom-12 left-20 right-0 z-10">
-              <div
-                className="flex justify-center px-8"
-              >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-white rounded-full shadow-lg flex items-center">
-                    <RecordingControls
-                      isRecording={recordingState.isRecording}
-                      onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
-                      onRecordingStart={handleRecordingStart}
-                      onTranscriptReceived={() => { }} // Not actually used by RecordingControls
-                      onStopInitiated={() => setIsStopping(true)}
-                      barHeights={barHeights}
-                      onTranscriptionError={(message) => {
-                        showModal('errorAlert', message);
-                      }}
-                      isRecordingDisabled={isRecordingDisabled}
-                      isParentProcessing={isProcessingStop}
-                      selectedDevices={selectedDevices}
-                      meetingName={meetingTitle}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
         {/* Status Overlays - Processing and Saving */}
         <StatusOverlays
