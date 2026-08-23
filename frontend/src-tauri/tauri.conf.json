@@ -7,7 +7,7 @@
         "frontendDist": "../out",
         "devUrl": "http://localhost:3119",
         "beforeDevCommand": "pnpm dev",
-        "beforeBuildCommand": "pnpm build"
+        "beforeBuildCommand": "pnpm build && node ../scripts/check-release-boundaries.mjs"
     },
     "app": {
         "windows": [
@@ -124,10 +124,11 @@
             "icons/app_icon.icns",
             "icons/app_icon.ico"
         ],
-        "resources": [
-            "templates/*.json",
-            "../../funasr_sidecar/*"
-        ],
+        "resources": {
+            "templates": "templates",
+            "../../funasr_sidecar": "funasr_sidecar",
+            "../../scripts/generate-python-runtime-notices.py": "funasr_sidecar/tools/generate-python-runtime-notices.py"
+        },
         "externalBin": [
             "binaries/llama-helper",
             "binaries/ffmpeg"

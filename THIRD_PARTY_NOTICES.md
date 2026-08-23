@@ -19,7 +19,7 @@ The original copyright and MIT permission notice are preserved in `LICENSE.md`. 
 - Toolkit license: MIT License
 - Source: https://github.com/modelscope/FunASR
 
-FunASR toolkit source and pretrained model weights are licensed separately. CalMee does not commit or bundle model weights. Models are downloaded only after user selection, and each model card governs use and redistribution.
+FunASR toolkit source and pretrained model weights are licensed separately. CalMee does not commit or bundle model weights or a Python/FunASR/PyTorch runtime. After explicit first-use confirmation, the app installs a target-native isolated runtime below its identifier-specific application-data directory. The installer generates `third-party/python-packages.json`, copies package license/notice files below `third-party/licenses`, and retains the CPython license and generated notice beside the installed runtime. Model weights remain separate opt-in downloads, and each model card governs use and redistribution.
 
 Representative models may include Paraformer, SenseVoice, FSMN-VAD, CT-Transformer punctuation, and CAM++. Review each license independently before distribution. SenseVoice model cards, in particular, reference the FunASR Model License rather than the toolkit MIT License.
 
@@ -37,6 +37,19 @@ CalMee retains optional Whisper-compatible transcription code and dependencies. 
 
 CalMee uses an external FFmpeg binary for media conversion. FFmpeg builds may be LGPL or GPL depending on configuration. A release must publish the exact binary provenance, source/build information, and notices required by that build.
 
+## Installed CPython and Python dependency inventory
+
+The first-use interpreter is pinned to an exact target-native CPython version.
+Its `LICENSE.txt` is retained as `third-party/CPYTHON-LICENSE.txt`. Every
+installed Python distribution—including PyTorch, torchaudio, FunASR,
+ModelScope, and all transitive packages—is recorded with its exact version,
+license metadata, project URL, and copied license files in the generated
+runtime inventory. The runtime manifest records and verifies that inventory's
+SHA-256 hash.
+
 ## Other dependencies
 
-Rust crates, npm packages, and Python packages retain their own licenses. Before a public binary release, generate a dependency license inventory from `Cargo.lock`, the pnpm lockfile, and `funasr_sidecar/requirements.txt`, then include every required notice.
+Rust crates and npm packages retain their own licenses. Before a public binary
+release, generate their inventories from `Cargo.lock` and the pnpm lockfile and
+include every required notice. The Python inventory is generated automatically
+inside the hash-locked installed runtime.

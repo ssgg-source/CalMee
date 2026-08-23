@@ -13,6 +13,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-release-boundaries.mjs
+      - run: node --check scripts/lock-funasr-runtime.mjs
+      - run: python3 -m py_compile scripts/generate-python-runtime-notices.py
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

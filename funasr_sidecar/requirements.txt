@@ -1,7 +1,7 @@
 funasr==1.4.1
-modelscope>=1.33,<2
-numpy>=1.24
-pypinyin>=0.55
-soundfile>=0.12
-torch>=2.1
-torchaudio>=2.1
+modelscope==1.39.1
+numpy==2.4.6
+pypinyin==0.55.0
+soundfile==0.14.0
+torch==2.11.0
+torchaudio==2.11.0

@@ -139,6 +139,8 @@ pub struct FunAsrModelProfile {
     pub description: &'static str,
     pub languages: &'static str,
     pub capabilities: &'static [&'static str],
+    #[serde(rename = "estimatedDownloadBytes")]
+    pub estimated_download_bytes: u64,
 }
 
 pub fn model_profiles() -> Vec<FunAsrModelProfile> {
@@ -149,6 +151,7 @@ pub fn model_profiles() -> Vec<FunAsrModelProfile> {
             description: "Recommended for Chinese meetings; supports timestamps, hotwords, punctuation and speaker diarization.",
             languages: "Chinese / English code-switching",
             capabilities: &["vad", "punctuation", "timestamps", "hotwords", "speakers"],
+            estimated_download_bytes: 1_600_000_000,
         },
         FunAsrModelProfile {
             id: "iic/SenseVoiceSmall",
@@ -156,6 +159,7 @@ pub fn model_profiles() -> Vec<FunAsrModelProfile> {
             description: "Multilingual speech recognition with emotion and audio-event tokens.",
             languages: "Chinese / Cantonese / English / Japanese / Korean",
             capabilities: &["vad", "multilingual", "emotion", "audio-events", "itn"],
+            estimated_download_bytes: 1_000_000_000,
         },
         FunAsrModelProfile {
             id: "FunAudioLLM/Fun-ASR-Nano-2512",
@@ -163,6 +167,7 @@ pub fn model_profiles() -> Vec<FunAsrModelProfile> {
             description: "New-generation 800M model for Chinese meetings, dialects, English and Japanese; hotwords are supported.",
             languages: "Chinese / dialects / English / Japanese",
             capabilities: &["vad", "multilingual", "hotwords", "itn"],
+            estimated_download_bytes: 2_000_000_000,
         },
         FunAsrModelProfile {
             id: "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
@@ -170,6 +175,7 @@ pub fn model_profiles() -> Vec<FunAsrModelProfile> {
             description: "Multilingual 800M model covering 31 languages; use the meeting pipeline for optional speaker diarization.",
             languages: "31 languages",
             capabilities: &["vad", "multilingual", "hotwords", "itn"],
+            estimated_download_bytes: 2_000_000_000,
         },
     ]
 }
@@ -182,6 +188,7 @@ pub fn qwen3_asr_model_profiles() -> Vec<FunAsrModelProfile> {
             description: "Balanced local model for multilingual transcription and Chinese dialects.",
             languages: "52 languages and dialects",
             capabilities: &["multilingual", "dialects", "offline"],
+            estimated_download_bytes: 1_500_000_000,
         },
         FunAsrModelProfile {
             id: "Qwen/Qwen3-ASR-1.7B",
@@ -189,6 +196,7 @@ pub fn qwen3_asr_model_profiles() -> Vec<FunAsrModelProfile> {
             description: "Higher-quality local model. Requires substantially more memory and processing time.",
             languages: "52 languages and dialects",
             capabilities: &["multilingual", "dialects", "offline"],
+            estimated_download_bytes: 3_800_000_000,
         },
     ]
 }

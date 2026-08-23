@@ -94,14 +94,17 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     }
 
     try {
-      const [funasrModels,funasrStatus] = await Promise.all([invoke<Array<{ id: string; name: string; languages?:string; capabilities?:string[] }>>('funasr_get_model_profiles'),invoke<{loaded:boolean;model?:string|null}>('funasr_get_status').catch(()=>({loaded:false,model:null}))]);
-      let ready:string[]=[];try{ready=JSON.parse(window.localStorage.getItem('calmee.funasr.readyModels')||'[]');}catch{ready=[];}
-      const readySet=new Set([...ready,...(funasrStatus.loaded&&funasrStatus.model?[funasrStatus.model]:[])]);
+      const [funasrModels,funasrStates] = await Promise.all([
+        invoke<Array<{ id: string; name: string; languages?:string; capabilities?:string[] }>>('funasr_get_model_profiles'),
+        invoke<Array<{ id:string;ready:boolean;sizeBytes:number }>>('funasr_get_model_states',{family:'funasr'}),
+      ]);
+      const states=new Map(funasrStates.map(state=>[state.id,state]));
+      const readySet=new Set(funasrStates.filter(state=>state.ready).map(state=>state.id));
       allModels.push(...funasrModels.filter(model=>readySet.has(model.id)).map(model => ({
         provider: 'funasr' as const,
         name: model.id,
         displayName: `🎙️ FunASR: ${model.name}`,
-        size_mb: 0,
+        size_mb: (states.get(model.id)?.sizeBytes || 0) / (1024 * 1024),
         capabilities: Array.from(new Set([...(model.capabilities || []), 'speaker-diarization', 'voiceprint-matching'])) as TranscriptionCapability[],
         languages: model.languages || 'Chinese / multilingual',
       })));
@@ -110,14 +113,17 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     }
 
     try {
-      const [qwenModels,funasrStatus] = await Promise.all([invoke<Array<{ id: string; name: string; languages?:string; capabilities?:string[] }>>('qwen3_asr_get_model_profiles'),invoke<{loaded:boolean;model?:string|null}>('funasr_get_status').catch(()=>({loaded:false,model:null}))]);
-      let ready:string[]=[];try{ready=JSON.parse(window.localStorage.getItem('calmee.qwen3asr.readyModels')||'[]');}catch{ready=[];}
-      const readySet=new Set([...ready,...(funasrStatus.loaded&&funasrStatus.model?[funasrStatus.model]:[])]);
+      const [qwenModels,qwenStates] = await Promise.all([
+        invoke<Array<{ id: string; name: string; languages?:string; capabilities?:string[] }>>('qwen3_asr_get_model_profiles'),
+        invoke<Array<{ id:string;ready:boolean;sizeBytes:number }>>('funasr_get_model_states',{family:'qwen3asr'}),
+      ]);
+      const states=new Map(qwenStates.map(state=>[state.id,state]));
+      const readySet=new Set(qwenStates.filter(state=>state.ready).map(state=>state.id));
       allModels.push(...qwenModels.filter(model=>readySet.has(model.id)).map(model => ({
         provider: 'qwen3asr' as const,
         name: model.id,
         displayName: `🏠 Qwen3-ASR: ${model.name}`,
-        size_mb: 0,
+        size_mb: (states.get(model.id)?.sizeBytes || 0) / (1024 * 1024),
         capabilities: ['timestamps', 'multilingual'] as TranscriptionCapability[],
         languages: model.languages || '52 languages and dialects',
       })));

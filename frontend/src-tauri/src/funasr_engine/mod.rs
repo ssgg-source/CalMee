@@ -2,6 +2,8 @@ mod bridge;
 mod commands;
 mod config;
 mod engine;
+mod model_storage;
+mod runtime_installer;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +20,72 @@ pub struct FunAsrStatus {
     pub loaded: bool,
     pub model: Option<String>,
     pub device: Option<String>,
+    #[serde(default)]
+    pub model_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunAsrRuntimeStatus {
+    pub available: bool,
+    pub source: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunAsrRuntimeInstallPlan {
+    pub supported: bool,
+    pub platform: String,
+    pub runtime_download_bytes: u64,
+    pub runtime_disk_bytes: u64,
+    pub runtime_directory: String,
+    pub model_directory: String,
+    pub network_required: bool,
+    pub resumable: bool,
+    pub license_path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunAsrRuntimeInstallStatus {
+    pub state: String,
+    pub progress: u32,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl FunAsrRuntimeInstallStatus {
+    fn idle(message: impl Into<String>) -> Self {
+        Self {
+            state: "notInstalled".into(),
+            progress: 0,
+            message: message.into(),
+            retryable: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunAsrModelState {
+    pub id: String,
+    pub family: String,
+    pub downloaded: bool,
+    pub ready: bool,
+    pub size_bytes: u64,
+    pub loaded: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunAsrLegacyImportPreview {
+    pub available: bool,
+    pub model_count: usize,
+    pub size_bytes: u64,
+    pub source_locations: Vec<String>,
+    pub target_location: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

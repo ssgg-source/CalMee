@@ -33,6 +33,7 @@ class LoadedModel:
     fingerprint: str
     device: str
     model_id: str
+    model_path: str | None
 
 
 @dataclass
@@ -223,9 +224,66 @@ def _load_model(config: dict[str, Any]) -> LoadedModel:
             auto_model_module.postprocess = postprocess_with_centers
 
         model = AutoModel(**kwargs)
-    _loaded = LoadedModel(model=model, fingerprint=fingerprint, device=device, model_id=model_id)
+    resolved_path = getattr(model, "model_path", None)
+    _loaded = LoadedModel(
+        model=model,
+        fingerprint=fingerprint,
+        device=device,
+        model_id=model_id,
+        model_path=str(resolved_path) if resolved_path else None,
+    )
     _log(f"loaded {model_id} in {time.perf_counter() - started:.1f}s")
     return _loaded
+
+
+def _download_model(config: dict[str, Any]) -> dict[str, Any]:
+    """Download the selected model and its enabled shared helpers without loading them."""
+    model_id = str(config.get("model") or "paraformer-zh")
+    hub = str(config.get("hub") or "ms")
+    requests: list[tuple[str, str, str | None]] = [
+        (model_id, hub, config.get("model_revision")),
+    ]
+    if hub in {"ms", "modelscope"}:
+        if config.get("vad_enabled", True):
+            requests.append((
+                str(config.get("vad_model") or "fsmn-vad"),
+                hub,
+                config.get("vad_model_revision"),
+            ))
+        if config.get("punc_enabled", True):
+            requests.append((
+                str(config.get("punc_model") or "ct-punc"),
+                hub,
+                config.get("punc_model_revision"),
+            ))
+        if config.get("speaker_enabled", True):
+            requests.append((
+                str(config.get("speaker_model") or "cam++"),
+                hub,
+                config.get("speaker_model_revision"),
+            ))
+
+    paths: list[str] = []
+    with contextlib.redirect_stdout(sys.stderr):
+        from funasr.download.download_model_from_hub import download_model
+
+        for requested_model, requested_hub, revision in requests:
+            kwargs: dict[str, Any] = {
+                "model": requested_model,
+                "hub": requested_hub,
+                "check_latest": False,
+                "trust_remote_code": bool(config.get("trust_remote_code", False)),
+            }
+            if revision:
+                kwargs["model_revision"] = revision
+            _log(f"downloading {requested_model} from {requested_hub}")
+            resolved = download_model(**kwargs)
+            model_path = str(resolved.get("model_path") or "")
+            if not model_path or not os.path.isdir(model_path):
+                raise RuntimeError(f"Model download did not produce a usable directory: {requested_model}")
+            paths.append(model_path)
+
+    return {"model": model_id, "model_path": paths[0], "model_paths": paths}
 
 
 def _stream_start(config: dict[str, Any]) -> dict[str, Any]:
@@ -1314,10 +1372,18 @@ def _handle(
             "loaded": _loaded is not None,
             "model": _loaded.model_id if _loaded else None,
             "device": _loaded.device if _loaded else None,
+            "model_path": _loaded.model_path if _loaded else None,
         }
     if action == "load":
         loaded = _load_model(config)
-        return {"loaded": True, "model": loaded.model_id, "device": loaded.device}
+        return {
+            "loaded": True,
+            "model": loaded.model_id,
+            "device": loaded.device,
+            "model_path": loaded.model_path,
+        }
+    if action == "download":
+        return _download_model(config)
     if action == "stream_start":
         return _stream_start(config)
     if action == "stream_chunk":

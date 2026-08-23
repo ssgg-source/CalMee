@@ -30,10 +30,8 @@
 //!
 //! # Custom Templates
 //!
-//! Users can add custom templates to:
-//! - macOS: `~/Library/Application Support/CalMee/templates/`
-//! - Windows: `%APPDATA%\CalMee\templates\`
-//! - Linux: `~/.config/CalMee/templates/`
+//! Users can add custom templates below the identifier-specific app-data
+//! directory in its `templates/` subdirectory.
 //!
 //! Custom templates must follow the JSON schema defined in `types::Template`.
 

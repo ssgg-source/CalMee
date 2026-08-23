@@ -111,6 +111,11 @@ tokio-util = "0.7"  # Utilities for tokio including CancellationToken
 async-trait = "0.1"  # Trait abstraction for async methods
 
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }
+sha2 = "0.10"
+hex = "0.4"
+flate2 = "1.0"
+tar = "0.4"
+zip = "2.4"
 
 # crossbeam
 crossbeam = "0.8.4"
