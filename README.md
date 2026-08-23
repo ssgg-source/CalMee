@@ -115,6 +115,22 @@ Model files are downloaded only after the user selects a model. The development 
 environment, model caches, recordings, databases, credentials, and build artifacts must
 never be committed.
 
+Official desktop packages stay lightweight and do **not** bundle Python, PyTorch, FunASR,
+or model weights. On the first local-model use, CalMee previews the runtime download,
+disk use, network requirement, private target directory, and third-party notices, then
+installs a hash-locked isolated runtime after confirmation. A verified runtime is reused
+offline; failed or cancelled setup never replaces a working version. FunASR and Qwen3-ASR weights are stored below CalMee's
+identifier-specific application-data directory (`models/funasr`), are verified by the
+backend before they are shown as ready, and can be removed individually in Settings.
+If an earlier compatible cache is detected, Settings previews its source, target, model
+count, and size before an explicit copy. Only allowlisted model directories are copied;
+the source cache is never moved, modified, or deleted, and imported files still require
+a successful load before they are shown as ready.
+Runtime dependencies use target-specific hash locks. The first-use installer downloads a
+pinned `uv`, verifies its SHA-256, installs exact CPython and package inputs, generates a
+machine-readable license inventory, self-tests in staging, and atomically activates it.
+Intel macOS is blocked before download because the locked PyTorch release has no compatible wheel.
+
 Before publishing a binary, follow
 [docs/OPEN_SOURCE_RELEASE_CHECKLIST.md](./docs/OPEN_SOURCE_RELEASE_CHECKLIST.md).
 For the first repository launch, follow

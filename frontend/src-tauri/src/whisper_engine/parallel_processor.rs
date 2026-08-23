@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 
+use super::commands::get_models_directory;
 use super::system_monitor::SystemMonitor;
 use super::whisper_engine::WhisperEngine;
 
@@ -217,6 +218,9 @@ impl ParallelProcessor {
     async fn create_worker(&self, worker_id: u32, model_name: String) -> Result<Worker> {
         info!("Creating worker {}", worker_id);
 
+        let models_dir = get_models_directory()
+            .ok_or_else(|| anyhow!("Identifier-specific models directory is not initialized"))?;
+
         // Create isolated WhisperEngine for this worker
         let whisper_engine = Arc::new(RwLock::new(None));
 
@@ -243,7 +247,7 @@ impl ParallelProcessor {
             // Load model for this worker
             {
                 let mut engine_guard = engine_ref.write().await;
-                let engine = WhisperEngine::new()
+                let engine = WhisperEngine::new_with_models_dir(Some(models_dir))
                     .map_err(|e| anyhow!("Failed to create WhisperEngine: {}", e))?;
                 engine
                     .load_model(&model_name)

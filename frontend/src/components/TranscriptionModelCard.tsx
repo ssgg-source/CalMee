@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Trash2 } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 interface Props {
@@ -10,10 +10,14 @@ interface Props {
   icon: string;
   isSelected: boolean;
   isReady: boolean;
+  isDownloaded?: boolean;
   isRecommended?: boolean;
   isBusy?: boolean;
+  busyAction?: 'download' | 'load' | null;
   progress?: number | null;
   badges?: string[];
+  sizeText?: string;
+  onDelete?: () => void;
   onSelect: () => void;
   onDownload: () => void;
 }
@@ -25,10 +29,14 @@ export function TranscriptionModelCard({
   icon,
   isSelected,
   isReady,
+  isDownloaded = isReady,
   isRecommended = false,
   isBusy = false,
+  busyAction = null,
   progress = null,
   badges = [],
+  sizeText,
+  onDelete,
   onSelect,
   onDownload,
 }: Props) {
@@ -38,14 +46,14 @@ export function TranscriptionModelCard({
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
-      className={`relative rounded-lg border-2 transition-all ${isReady ? 'cursor-pointer' : 'cursor-default'} ${
-        isSelected && isReady
+      className={`relative rounded-lg border-2 transition-all ${isReady || isDownloaded ? 'cursor-pointer' : 'cursor-default'} ${
+        isSelected
           ? 'border-blue-500 bg-blue-50'
           : isReady
             ? 'border-gray-200 bg-white hover:border-gray-300'
             : 'border-gray-200 bg-gray-50'
       }`}
-      onClick={() => { if (isReady && !isBusy) onSelect(); }}
+      onClick={() => { if ((isReady || isDownloaded) && !isBusy) onSelect(); }}
     >
       {isRecommended && (
         <div className="absolute -right-2 -top-2 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
@@ -58,16 +66,29 @@ export function TranscriptionModelCard({
             <div className="mb-1 flex items-center gap-2">
               <span className="text-2xl">{icon}</span>
               <h3 className="font-semibold text-gray-900">{name}</h3>
-              {isSelected && isReady && <span className="flex items-center rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">✓</span>}
+              {isSelected && <span className="flex items-center rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">✓</span>}
             </div>
             <p className="ml-9 text-sm text-gray-600">{description}</p>
-            {badges.length > 0 && <div className="ml-9 mt-2 flex flex-wrap gap-1.5">{badges.map(badge => <span key={badge} className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[11px] text-slate-500">{badge}</span>)}</div>}
+            {(badges.length > 0 || sizeText) && <div className="ml-9 mt-2 flex flex-wrap gap-1.5">{badges.map(badge => <span key={badge} className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[11px] text-slate-500">{badge}</span>)}{sizeText && <span className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[11px] text-slate-500">{sizeText}</span>}</div>}
           </div>
           <div className="ml-4 flex shrink-0 items-center gap-2">
-            {isReady ? (
-              <div className="flex items-center gap-1.5 text-green-600">
-                {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <div className="h-2 w-2 rounded-full bg-green-500" />}
-                <span className="text-xs font-medium">{isBusy ? lt('Loading…') : lt('Ready')}</span>
+            {isBusy ? (
+              <span className="flex items-center gap-1.5 text-sm font-medium text-blue-600">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {busyAction === 'load' ? lt('Loading…') : lt('Downloading…')}
+              </span>
+            ) : isReady ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 text-green-600">
+                  <div className="h-2 w-2 rounded-full bg-green-500" />
+                  <span className="text-xs font-medium">{lt('Ready')}</span>
+                </div>
+                {onDelete && <button type="button" aria-label={lt('Delete model')} title={lt('Delete model')} onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded-md p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>}
+              </div>
+            ) : isDownloaded ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500">{lt('Downloaded')}</span>
+                {onDelete && <button type="button" aria-label={lt('Delete model')} title={lt('Delete model')} onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded-md p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>}
               </div>
             ) : (
               <button
@@ -76,7 +97,7 @@ export function TranscriptionModelCard({
                 onClick={(event) => { event.stopPropagation(); onDownload(); }}
                 className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
               >
-                {isBusy ? <span className="flex items-center gap-1.5"><Loader2 className="h-3.5 w-3.5 animate-spin" />{lt('Downloading…')}</span> : lt('Download')}
+                {lt('Download')}
               </button>
             )}
           </div>
@@ -84,7 +105,7 @@ export function TranscriptionModelCard({
         {isBusy && (
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 flex items-center justify-between text-sm font-medium text-blue-600">
-              <span>{isReady ? lt('Loading model…') : lt('Downloading model…')}</span>
+              <span>{busyAction === 'load' ? lt('Loading model…') : lt('Downloading model…')}</span>
               {progress !== null && <span>{Math.round(progress)}%</span>}
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">

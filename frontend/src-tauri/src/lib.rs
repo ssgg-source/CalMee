@@ -34,16 +34,18 @@ macro_rules! perf_trace {
 pub mod analytics;
 pub mod anthropic;
 pub mod api;
+pub mod app_paths;
 pub mod audio;
 pub mod calendar_integration;
 pub mod cloud_models;
 pub mod config;
 pub mod console_utils;
-pub mod database;
 pub mod data_import;
+pub mod database;
 pub mod funasr_engine;
 pub mod groq;
 pub mod knowledge;
+pub mod legacy_hotwords;
 pub mod meeting_workspace;
 pub mod notifications;
 pub mod ollama;
@@ -61,10 +63,10 @@ pub mod whisper_engine;
 use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
+use state::DatabaseStartupState;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::RwLock;
-use state::DatabaseStartupState;
 
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 
@@ -418,6 +420,8 @@ pub fn run() {
         .setup(|_app| {
             log::info!("Application setup complete");
 
+            app_paths::initialize(&_app.handle()).map_err(std::io::Error::other)?;
+
             // Recover from stale coordinates left by a disconnected display
             // or an earlier floating-window session.
             tray::focus_main_window(&_app.handle());
@@ -555,6 +559,8 @@ pub fn run() {
             data_import::api_select_legacy_calmee_source,
             data_import::api_preview_legacy_calmee_import,
             data_import::api_import_legacy_calmee_data,
+            legacy_hotwords::api_preview_legacy_hotword_disposition,
+            legacy_hotwords::api_apply_legacy_hotword_disposition,
             start_recording,
             stop_recording,
             is_recording,
@@ -620,9 +626,19 @@ pub fn run() {
             funasr_engine::funasr_reset_config,
             funasr_engine::funasr_get_model_profiles,
             funasr_engine::qwen3_asr_get_model_profiles,
+            funasr_engine::funasr_download_model,
             funasr_engine::funasr_load_model,
             funasr_engine::funasr_unload_model,
             funasr_engine::funasr_get_status,
+            funasr_engine::funasr_get_runtime_status,
+            funasr_engine::funasr_get_runtime_install_plan,
+            funasr_engine::funasr_get_runtime_install_status,
+            funasr_engine::funasr_install_runtime,
+            funasr_engine::funasr_cancel_runtime_install,
+            funasr_engine::funasr_get_model_states,
+            funasr_engine::funasr_delete_model,
+            funasr_engine::funasr_get_legacy_model_import_preview,
+            funasr_engine::funasr_import_legacy_models,
             funasr_engine::funasr_transcribe_audio,
             transcript_refinement::api_start_local_transcript_refinement,
             transcript_refinement::api_get_transcript_refinement_status,

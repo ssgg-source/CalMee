@@ -19,14 +19,9 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// Get the user's custom templates directory path
 ///
 /// Returns the platform-specific application data directory for custom templates:
-/// - macOS: ~/Library/Application Support/CalMee/templates/
-/// - Windows: %APPDATA%\CalMee\templates\
-/// - Linux: ~/.config/CalMee/templates/
+/// The directory is below Tauri's identifier-specific app-data root.
 fn get_custom_templates_dir() -> Option<PathBuf> {
-    let mut path = dirs::data_dir()?;
-    path.push("CalMee");
-    path.push("templates");
-    Some(path)
+    crate::app_paths::custom_templates_dir().ok()
 }
 
 /// Load a template from the bundled resources directory

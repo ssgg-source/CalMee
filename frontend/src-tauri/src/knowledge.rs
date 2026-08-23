@@ -269,11 +269,22 @@ async fn load_person_activity(
         let meeting_id: String = meeting.get("id");
         let meeting_title: String = meeting.get("title");
         let start_at: Option<String> = meeting.get("start_at");
-        let has_refinement: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM transcript_refinements WHERE meeting_id=?)")
-            .bind(&meeting_id).fetch_one(pool).await.map_err(|e|e.to_string())?;
+        let has_refinement: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM transcript_refinements WHERE meeting_id=?)",
+        )
+        .bind(&meeting_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
         let has_clustered: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM transcript_versions WHERE meeting_id=? AND version_kind='clustered')")
             .bind(&meeting_id).fetch_one(pool).await.map_err(|e|e.to_string())?;
-        let source_kind = if has_refinement != 0 { "ai_optimized" } else if has_clustered != 0 { "clustered" } else { "original" };
+        let source_kind = if has_refinement != 0 {
+            "ai_optimized"
+        } else if has_clustered != 0 {
+            "clustered"
+        } else {
+            "original"
+        };
         let assigned_speakers = sqlx::query_scalar::<_, String>("SELECT local_speaker FROM meeting_speaker_assignments WHERE meeting_id=? AND person_id=?")
             .bind(&meeting_id).bind(person_id).fetch_all(pool).await.map_err(|e|e.to_string())?.into_iter().collect::<HashSet<_>>();
         let overridden_ids = sqlx::query_scalar::<_, String>("SELECT transcript_id FROM transcript_speaker_overrides WHERE meeting_id=? AND person_id=?")
@@ -282,7 +293,10 @@ async fn load_person_activity(
         let mut count = 0usize;
         for sentence in source {
             let belongs = overridden_ids.contains(&sentence.id)
-                || sentence.speaker.as_ref().is_some_and(|speaker| assigned_speakers.contains(speaker));
+                || sentence
+                    .speaker
+                    .as_ref()
+                    .is_some_and(|speaker| assigned_speakers.contains(speaker));
             if !belongs || sentence.text.trim().is_empty() {
                 continue;
             }
@@ -299,7 +313,12 @@ async fn load_person_activity(
                 });
             }
         }
-        meetings.push(PersonMeetingSummary { id: meeting_id, title: meeting_title, start_at, utterance_count: count });
+        meetings.push(PersonMeetingSummary {
+            id: meeting_id,
+            title: meeting_title,
+            start_at,
+            utterance_count: count,
+        });
     }
     Ok((meetings, utterances))
 }
@@ -466,12 +485,16 @@ async fn load_source_sentences(
             let Some(encoded) = snapshot else { continue };
             let segments = serde_json::from_str::<Vec<crate::api::TranscriptSegment>>(&encoded)
                 .unwrap_or_default();
-            if segments.is_empty() { continue; }
+            if segments.is_empty() {
+                continue;
+            }
             return Ok(segments
                 .into_iter()
                 .filter_map(|segment| {
                     let (speaker, text) = parse_speaker_prefix(&segment.text);
-                    if text.trim().is_empty() { return None; }
+                    if text.trim().is_empty() {
+                        return None;
+                    }
                     Some(SourceSentence {
                         id: segment.id,
                         speaker,
@@ -1347,8 +1370,8 @@ pub async fn api_get_person_detail<R: Runtime>(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Participant not found".to_string())?;
-    let aliases = serde_json::from_str::<Vec<String>>(&row.get::<String, _>("aliases"))
-        .unwrap_or_default();
+    let aliases =
+        serde_json::from_str::<Vec<String>>(&row.get::<String, _>("aliases")).unwrap_or_default();
     let notes: Option<String> = row.get("notes");
     let profile_context: Option<String> = row.get("profile_context");
     let profile_json = row
@@ -1385,7 +1408,17 @@ pub async fn api_get_person_detail<R: Runtime>(
         .collect::<Vec<_>>();
 
     let (meetings, utterances) = load_person_activity(pool, &person_id).await?;
-    Ok(PersonDetail { person, aliases, notes, profile_context, profile_json, profile_updated_at, voiceprints, meetings, utterances })
+    Ok(PersonDetail {
+        person,
+        aliases,
+        notes,
+        profile_context,
+        profile_json,
+        profile_updated_at,
+        voiceprints,
+        meetings,
+        utterances,
+    })
 }
 
 #[tauri::command]
@@ -1405,14 +1438,18 @@ pub async fn api_update_person_profile<R: Runtime>(
         }
     }
     sqlx::query("UPDATE people SET aliases=?,notes=?,profile_context=?,updated_at=? WHERE id=?")
-        .bind(serde_json::to_string(&cleaned).map_err(|e|e.to_string())?)
-        .bind(notes.as_deref().filter(|value|!value.trim().is_empty()))
-        .bind(profile_context.as_deref().filter(|value|!value.trim().is_empty()))
+        .bind(serde_json::to_string(&cleaned).map_err(|e| e.to_string())?)
+        .bind(notes.as_deref().filter(|value| !value.trim().is_empty()))
+        .bind(
+            profile_context
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
+        )
         .bind(Utc::now().to_rfc3339())
         .bind(person_id)
         .execute(state.db_manager.pool())
         .await
-        .map_err(|e|e.to_string())?;
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1449,15 +1486,31 @@ JSON shape:
 
 fn clean_profile_json(raw: &str) -> Result<serde_json::Value, String> {
     let trimmed = raw.trim();
-    let start = trimmed.find('{').ok_or_else(|| "AI did not return a JSON profile".to_string())?;
-    let end = trimmed.rfind('}').ok_or_else(|| "AI returned an incomplete profile".to_string())?;
+    let start = trimmed
+        .find('{')
+        .ok_or_else(|| "AI did not return a JSON profile".to_string())?;
+    let end = trimmed
+        .rfind('}')
+        .ok_or_else(|| "AI returned an incomplete profile".to_string())?;
     let mut value: serde_json::Value = serde_json::from_str(&trimmed[start..=end])
         .map_err(|e| format!("Failed to parse the AI profile: {}", e))?;
-    let object = value.as_object_mut().ok_or_else(|| "AI profile must be a JSON object".to_string())?;
-    if object.get("overview").and_then(|item| item.as_str()).is_none_or(|item| item.trim().is_empty()) {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "AI profile must be a JSON object".to_string())?;
+    if object
+        .get("overview")
+        .and_then(|item| item.as_str())
+        .is_none_or(|item| item.trim().is_empty())
+    {
         return Err("AI profile is missing its overview".into());
     }
-    for key in ["communicationStyle", "discussionPatterns", "decisionAndActionStyle", "behavioralTendencies", "personalityHypotheses"] {
+    for key in [
+        "communicationStyle",
+        "discussionPatterns",
+        "decisionAndActionStyle",
+        "behavioralTendencies",
+        "personalityHypotheses",
+    ] {
         let normalized = match object.remove(key) {
             Some(serde_json::Value::Array(items)) => serde_json::Value::Array(items),
             Some(serde_json::Value::Object(item)) => {
@@ -1475,7 +1528,10 @@ fn clean_profile_json(raw: &str) -> Result<serde_json::Value, String> {
         _ => serde_json::Value::Array(Vec::new()),
     };
     object.insert("uncertainties".into(), uncertainties);
-    if !object.get("dataCoverage").is_some_and(|item| item.is_object()) {
+    if !object
+        .get("dataCoverage")
+        .is_some_and(|item| item.is_object())
+    {
         object.insert(
             "dataCoverage".into(),
             serde_json::json!({ "note": "模型未提供数据覆盖说明" }),
@@ -1484,10 +1540,7 @@ fn clean_profile_json(raw: &str) -> Result<serde_json::Value, String> {
     Ok(value)
 }
 
-fn validate_profile_evidence(
-    profile: &mut serde_json::Value,
-    source: &str,
-) -> Result<(), String> {
+fn validate_profile_evidence(profile: &mut serde_json::Value, source: &str) -> Result<(), String> {
     const SECTION_KEYS: &[&str] = &[
         "communicationStyle",
         "discussionPatterns",
@@ -1507,12 +1560,20 @@ fn validate_profile_evidence(
             let Some(item_object) = item.as_object_mut() else {
                 return false;
             };
-            if item_object.get("evidence").is_some_and(|value| value.is_object()) {
+            if item_object
+                .get("evidence")
+                .is_some_and(|value| value.is_object())
+            {
                 if let Some(single) = item_object.remove("evidence") {
                     item_object.insert("evidence".into(), serde_json::Value::Array(vec![single]));
                 }
             }
-            let Some(evidence) = item_object.get_mut("evidence").and_then(|value| value.as_array_mut()) else { return false; };
+            let Some(evidence) = item_object
+                .get_mut("evidence")
+                .and_then(|value| value.as_array_mut())
+            else {
+                return false;
+            };
             evidence.retain(|entry| {
                 let Some(entry) = entry.as_object() else {
                     return false;
@@ -1563,16 +1624,31 @@ async fn run_person_profile<R: Runtime>(
     use crate::summary::llm_client::{generate_summary, LLMProvider};
 
     let parsed_provider = LLMProvider::from_str(&provider)?;
-    let is_cloud = !matches!(parsed_provider, LLMProvider::BuiltInAI | LLMProvider::Ollama);
+    let is_cloud = !matches!(
+        parsed_provider,
+        LLMProvider::BuiltInAI | LLMProvider::Ollama
+    );
     if is_cloud && !allow_cloud {
         return Err("Explicit permission is required before sending this participant's statements to a cloud model".into());
     }
-    if model.trim().is_empty() { return Err("Choose an AI model first".into()); }
+    if model.trim().is_empty() {
+        return Err("Choose an AI model first".into());
+    }
     let identity = sqlx::query("SELECT name,profile_context,notes FROM people WHERE id=?")
-        .bind(&person_id).fetch_optional(pool).await.map_err(|e|e.to_string())?
+        .bind(&person_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Participant not found".to_string())?;
     let person_name: String = identity.get("name");
-    update_person_profile_progress(&app, &person_id, &person_name, "preparing", 12, "Preparing confirmed statements…");
+    update_person_profile_progress(
+        &app,
+        &person_id,
+        &person_name,
+        "preparing",
+        12,
+        "Preparing confirmed statements…",
+    );
     let profile_context: Option<String> = identity.get("profile_context");
     let notes: Option<String> = identity.get("notes");
     let (meetings, utterances) = load_person_activity(pool, &person_id).await?;
@@ -1586,16 +1662,32 @@ async fn run_person_profile<R: Runtime>(
     let mut source = String::new();
     let mut included = 0usize;
     for utterance in &utterances {
-        if source.chars().count() >= 20_000 { break; }
-        let used = per_meeting_chars.entry(utterance.meeting_id.clone()).or_default();
-        if *used >= 3_500 { continue; }
+        if source.chars().count() >= 20_000 {
+            break;
+        }
+        let used = per_meeting_chars
+            .entry(utterance.meeting_id.clone())
+            .or_default();
+        if *used >= 3_500 {
+            continue;
+        }
         let text = utterance.text.trim();
-        if text.is_empty() { continue; }
+        if text.is_empty() {
+            continue;
+        }
         let remaining = 3_500usize.saturating_sub(*used);
         let excerpt = text.chars().take(remaining.min(800)).collect::<String>();
         let seconds = utterance.start_ms.max(0) / 1000;
-        let stamp = format!("{:02}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60);
-        source.push_str(&format!("\n[会议: {} | 时间: {} | 来源: {}]\n{}\n", utterance.meeting_title, stamp, utterance.source_kind, excerpt));
+        let stamp = format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds / 60) % 60,
+            seconds % 60
+        );
+        source.push_str(&format!(
+            "\n[会议: {} | 时间: {} | 来源: {}]\n{}\n",
+            utterance.meeting_title, stamp, utterance.source_kind, excerpt
+        ));
         *used += excerpt.chars().count();
         included += 1;
     }
@@ -1606,37 +1698,78 @@ async fn run_person_profile<R: Runtime>(
         notes.as_deref().unwrap_or("未提供"),
         meetings.len(), included, source
     );
-    let saved_config = SettingsRepository::get_model_config(pool).await.map_err(|e|e.to_string())?;
+    let saved_config = SettingsRepository::get_model_config(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     let ollama_endpoint = if parsed_provider == LLMProvider::Ollama {
-        saved_config.as_ref().and_then(|value| value.ollama_endpoint.as_deref())
-    } else { None };
-    let custom: Option<crate::summary::CustomOpenAIConfig> = if parsed_provider == LLMProvider::CustomOpenAI {
-        Some(SettingsRepository::get_custom_openai_config(pool).await.map_err(|e|e.to_string())?
-            .ok_or_else(|| "Custom OpenAI configuration does not exist".to_string())?)
-    } else { None };
-    let api_key = if matches!(parsed_provider, LLMProvider::BuiltInAI | LLMProvider::Ollama) {
+        saved_config
+            .as_ref()
+            .and_then(|value| value.ollama_endpoint.as_deref())
+    } else {
+        None
+    };
+    let custom: Option<crate::summary::CustomOpenAIConfig> =
+        if parsed_provider == LLMProvider::CustomOpenAI {
+            Some(
+                SettingsRepository::get_custom_openai_config(pool)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "Custom OpenAI configuration does not exist".to_string())?,
+            )
+        } else {
+            None
+        };
+    let api_key = if matches!(
+        parsed_provider,
+        LLMProvider::BuiltInAI | LLMProvider::Ollama
+    ) {
         String::new()
     } else if let Some(value) = custom.as_ref().and_then(|value| value.api_key.clone()) {
         value
     } else {
-        SettingsRepository::get_api_key(pool, &provider).await.map_err(|e|e.to_string())?
+        SettingsRepository::get_api_key(pool, &provider)
+            .await
+            .map_err(|e| e.to_string())?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| format!("No API key is configured for {}", provider))?
     };
-    let app_data_dir = app.path().app_data_dir().map_err(|e|e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let cancellation = CancellationToken::new();
-    PERSON_PROFILE_CANCELLATIONS.lock().map_err(|_| "Profile cancellation state is unavailable".to_string())?
+    PERSON_PROFILE_CANCELLATIONS
+        .lock()
+        .map_err(|_| "Profile cancellation state is unavailable".to_string())?
         .insert(person_id.clone(), cancellation.clone());
-    update_person_profile_progress(&app, &person_id, &person_name, "generating", 24, "AI is analyzing recurring speaking patterns…");
+    update_person_profile_progress(
+        &app,
+        &person_id,
+        &person_name,
+        "generating",
+        24,
+        "AI is analyzing recurring speaking patterns…",
+    );
     let client = reqwest::Client::new();
     let request = generate_summary(
-        &client, &parsed_provider, model.trim(), &api_key,
-        person_profile_system_prompt(), &user_prompt,
-        ollama_endpoint, custom.as_ref().map(|value| value.endpoint.as_str()),
-        Some(custom.as_ref().and_then(|value| value.max_tokens.map(|item| item as u32)).unwrap_or(6_000)),
-        custom.as_ref().and_then(|value| value.temperature).or(Some(0.2)),
+        &client,
+        &parsed_provider,
+        model.trim(),
+        &api_key,
+        person_profile_system_prompt(),
+        &user_prompt,
+        ollama_endpoint,
+        custom.as_ref().map(|value| value.endpoint.as_str()),
+        Some(
+            custom
+                .as_ref()
+                .and_then(|value| value.max_tokens.map(|item| item as u32))
+                .unwrap_or(6_000),
+        ),
+        custom
+            .as_ref()
+            .and_then(|value| value.temperature)
+            .or(Some(0.2)),
         custom.as_ref().and_then(|value| value.top_p).or(Some(0.9)),
-        Some(&app_data_dir), Some(&cancellation),
+        Some(&app_data_dir),
+        Some(&cancellation),
     );
     tokio::pin!(request);
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -1651,8 +1784,18 @@ async fn run_person_profile<R: Runtime>(
             }
         }
     };
-    PERSON_PROFILE_CANCELLATIONS.lock().ok().map(|mut items| items.remove(&person_id));
-    update_person_profile_progress(&app, &person_id, &person_name, "validating", 91, "Verifying evidence and confidence…");
+    PERSON_PROFILE_CANCELLATIONS
+        .lock()
+        .ok()
+        .map(|mut items| items.remove(&person_id));
+    update_person_profile_progress(
+        &app,
+        &person_id,
+        &person_name,
+        "validating",
+        91,
+        "Verifying evidence and confidence…",
+    );
     let mut profile = clean_profile_json(&raw)?;
     validate_profile_evidence(&mut profile, &source)?;
     if let Some(object) = profile.as_object_mut() {
@@ -1661,14 +1804,34 @@ async fn run_person_profile<R: Runtime>(
         object.insert("model".into(), model.clone().into());
         object.insert("meetingCount".into(), (meetings.len() as u64).into());
         object.insert("statementCount".into(), (included as u64).into());
-        object.insert("status".into(), (if meetings.len() >= 3 { "longitudinal" } else { "preliminary" }).into());
+        object.insert(
+            "status".into(),
+            (if meetings.len() >= 3 {
+                "longitudinal"
+            } else {
+                "preliminary"
+            })
+            .into(),
+        );
     }
-    let encoded = serde_json::to_string(&profile).map_err(|e|e.to_string())?;
+    let encoded = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();
-    update_person_profile_progress(&app, &person_id, &person_name, "saving", 97, "Saving the speaking profile…");
+    update_person_profile_progress(
+        &app,
+        &person_id,
+        &person_name,
+        "saving",
+        97,
+        "Saving the speaking profile…",
+    );
     sqlx::query("UPDATE people SET profile_json=?,profile_updated_at=?,updated_at=? WHERE id=?")
-        .bind(encoded).bind(&now).bind(&now).bind(&person_id)
-        .execute(pool).await.map_err(|e|e.to_string())?;
+        .bind(encoded)
+        .bind(&now)
+        .bind(&now)
+        .bind(&person_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(profile)
 }
 
@@ -1682,43 +1845,97 @@ pub async fn api_generate_person_profile<R: Runtime>(
     allow_cloud: Option<bool>,
 ) -> Result<PersonProfileJobStatus, String> {
     let person_name = sqlx::query_scalar::<_, String>("SELECT name FROM people WHERE id=?")
-        .bind(&person_id).fetch_optional(state.db_manager.pool()).await.map_err(|e|e.to_string())?
+        .bind(&person_id)
+        .fetch_optional(state.db_manager.pool())
+        .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Participant not found".to_string())?;
-    if PERSON_PROFILE_JOBS.lock().map_err(|_| "Profile task state is unavailable".to_string())?
-        .get(&person_id).is_some_and(|job| job.status == "processing") {
+    if PERSON_PROFILE_JOBS
+        .lock()
+        .map_err(|_| "Profile task state is unavailable".to_string())?
+        .get(&person_id)
+        .is_some_and(|job| job.status == "processing")
+    {
         return api_get_person_profile_status(person_id).await;
     }
-    PERSON_PROFILE_JOBS.lock().map_err(|_| "Profile task state is unavailable".to_string())?.insert(
-        person_id.clone(), PersonProfileJobStatus {
-            person_id: person_id.clone(), person_name: person_name.clone(), status: "processing".into(),
-            progress: Some(PersonProfileProgress { person_id: person_id.clone(), person_name: person_name.clone(), stage: "queued".into(), percentage: 5, message: "Profile generation queued…".into() }),
-            profile: None, error: None,
-        }
-    );
+    PERSON_PROFILE_JOBS
+        .lock()
+        .map_err(|_| "Profile task state is unavailable".to_string())?
+        .insert(
+            person_id.clone(),
+            PersonProfileJobStatus {
+                person_id: person_id.clone(),
+                person_name: person_name.clone(),
+                status: "processing".into(),
+                progress: Some(PersonProfileProgress {
+                    person_id: person_id.clone(),
+                    person_name: person_name.clone(),
+                    stage: "queued".into(),
+                    percentage: 5,
+                    message: "Profile generation queued…".into(),
+                }),
+                profile: None,
+                error: None,
+            },
+        );
     let pool = state.db_manager.pool().clone();
     let task_app = app.clone();
     let task_person_id = person_id.clone();
     let task_person_name = person_name.clone();
     tauri::async_runtime::spawn(async move {
-        let result = run_person_profile(task_app.clone(), &pool, task_person_id.clone(), provider, model, allow_cloud.unwrap_or(false)).await;
-        PERSON_PROFILE_CANCELLATIONS.lock().ok().map(|mut items| items.remove(&task_person_id));
+        let result = run_person_profile(
+            task_app.clone(),
+            &pool,
+            task_person_id.clone(),
+            provider,
+            model,
+            allow_cloud.unwrap_or(false),
+        )
+        .await;
+        PERSON_PROFILE_CANCELLATIONS
+            .lock()
+            .ok()
+            .map(|mut items| items.remove(&task_person_id));
         if let Ok(mut jobs) = PERSON_PROFILE_JOBS.lock() {
             if let Some(job) = jobs.get_mut(&task_person_id) {
                 job.progress = None;
                 match result {
-                    Ok(profile) => { job.status = "completed".into(); job.profile = Some(profile); job.error = None; }
+                    Ok(profile) => {
+                        job.status = "completed".into();
+                        job.profile = Some(profile);
+                        job.error = None;
+                    }
                     Err(error) => {
-                        job.status = if error.to_lowercase().contains("cancel") { "cancelled".into() } else { "error".into() };
+                        job.status = if error.to_lowercase().contains("cancel") {
+                            "cancelled".into()
+                        } else {
+                            "error".into()
+                        };
                         job.error = Some(error);
                     }
                 }
             }
         }
-        let status = PERSON_PROFILE_JOBS.lock().ok().and_then(|jobs| jobs.get(&task_person_id).cloned());
+        let status = PERSON_PROFILE_JOBS
+            .lock()
+            .ok()
+            .and_then(|jobs| jobs.get(&task_person_id).cloned());
         match status.as_ref().map(|item| item.status.as_str()) {
-            Some("completed") => { let _ = task_app.emit("person-profile-ai-complete", serde_json::json!({"personId":task_person_id,"personName":task_person_name})); }
-            Some("cancelled") => { let _ = task_app.emit("person-profile-ai-cancelled", serde_json::json!({"personId":task_person_id,"personName":task_person_name})); }
-            Some("error") => { let _ = task_app.emit("person-profile-ai-error", serde_json::json!({"personId":task_person_id,"personName":task_person_name,"error":status.and_then(|item|item.error)})); }
+            Some("completed") => {
+                let _ = task_app.emit(
+                    "person-profile-ai-complete",
+                    serde_json::json!({"personId":task_person_id,"personName":task_person_name}),
+                );
+            }
+            Some("cancelled") => {
+                let _ = task_app.emit(
+                    "person-profile-ai-cancelled",
+                    serde_json::json!({"personId":task_person_id,"personName":task_person_name}),
+                );
+            }
+            Some("error") => {
+                let _ = task_app.emit("person-profile-ai-error", serde_json::json!({"personId":task_person_id,"personName":task_person_name,"error":status.and_then(|item|item.error)}));
+            }
             _ => {}
         }
     });
@@ -1726,21 +1943,36 @@ pub async fn api_generate_person_profile<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn api_get_person_profile_status(person_id: String) -> Result<PersonProfileJobStatus, String> {
-    Ok(PERSON_PROFILE_JOBS.lock().map_err(|_| "Profile task state is unavailable".to_string())?
-        .get(&person_id).cloned().unwrap_or(PersonProfileJobStatus {
-            person_id, person_name: String::new(), status: "idle".into(), progress: None, profile: None, error: None,
+pub async fn api_get_person_profile_status(
+    person_id: String,
+) -> Result<PersonProfileJobStatus, String> {
+    Ok(PERSON_PROFILE_JOBS
+        .lock()
+        .map_err(|_| "Profile task state is unavailable".to_string())?
+        .get(&person_id)
+        .cloned()
+        .unwrap_or(PersonProfileJobStatus {
+            person_id,
+            person_name: String::new(),
+            status: "idle".into(),
+            progress: None,
+            profile: None,
+            error: None,
         }))
 }
 
 #[tauri::command]
 pub async fn api_cancel_person_profile(person_id: String) -> Result<(), String> {
     if let Ok(tokens) = PERSON_PROFILE_CANCELLATIONS.lock() {
-        if let Some(token) = tokens.get(&person_id) { token.cancel(); }
+        if let Some(token) = tokens.get(&person_id) {
+            token.cancel();
+        }
     }
     if let Ok(mut jobs) = PERSON_PROFILE_JOBS.lock() {
         if let Some(job) = jobs.get_mut(&person_id) {
-            job.status = "cancelled".into(); job.progress = None; job.error = None;
+            job.status = "cancelled".into();
+            job.progress = None;
+            job.error = None;
         }
     }
     Ok(())
@@ -2037,9 +2269,12 @@ pub async fn api_list_hotwords<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<Hotword>, String> {
-    seed_hotwords_from_saved_config(state.db_manager.pool()).await?;
+    list_hotwords(state.db_manager.pool()).await
+}
+
+async fn list_hotwords(pool: &SqlitePool) -> Result<Vec<Hotword>, String> {
     let rows = sqlx::query("SELECT * FROM hotwords ORDER BY enabled DESC,confidence DESC,usage_count DESC,updated_at DESC")
-        .fetch_all(state.db_manager.pool())
+        .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
     Ok(rows
@@ -2052,62 +2287,19 @@ pub async fn api_list_hotwords<R: Runtime>(
                 tags.push(category.clone());
             }
             Hotword {
-            id: r.get("id"),
-            term: r.get("term"),
-            replacement_from: r.get("replacement_from"),
-            category,
-            scope: r.get("scope"),
-            source: r.get("source"),
-            confidence: r.get("confidence"),
-            enabled: r.get::<i64, _>("enabled") != 0,
-            usage_count: r.get("usage_count"),
-            tags,
-        }})
+                id: r.get("id"),
+                term: r.get("term"),
+                replacement_from: r.get("replacement_from"),
+                category,
+                scope: r.get("scope"),
+                source: r.get("source"),
+                confidence: r.get("confidence"),
+                enabled: r.get::<i64, _>("enabled") != 0,
+                usage_count: r.get("usage_count"),
+                tags,
+            }
+        })
         .collect())
-}
-
-async fn seed_hotwords_from_saved_config(pool: &SqlitePool) -> Result<(), String> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hotwords")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| e.to_string())?;
-    if count != 0 {
-        return Ok(());
-    }
-
-    let config = crate::funasr_engine::load_saved_config().await;
-    let now = Utc::now().to_rfc3339();
-    let mut entries: Vec<(Option<String>, String)> = config
-        .hotwords
-        .split_whitespace()
-        .filter(|term| !term.trim().is_empty())
-        .map(|term| (None, term.trim().to_string()))
-        .collect();
-    entries.extend(
-        config
-            .postprocess_hotwords
-            .lines()
-            .filter_map(|line| line.split_once("=>"))
-            .map(|(old, new)| (Some(old.trim().to_string()), new.trim().to_string()))
-            .filter(|(old, new)| {
-                old.as_ref().is_some_and(|value| !value.is_empty()) && !new.is_empty()
-            }),
-    );
-
-    for (replacement_from, term) in entries {
-        sqlx::query("INSERT INTO hotwords (id,term,normalized_term,replacement_from,category,scope,source,confidence,enabled,created_at,updated_at) VALUES (?,?,?,?,?,'global','legacy_config',1.0,1,?,?) ON CONFLICT(normalized_term,IFNULL(replacement_from,''),scope) DO NOTHING")
-            .bind(format!("hotword-{}", Uuid::new_v4()))
-            .bind(term.trim())
-            .bind(normalize_term(&term))
-            .bind(replacement_from.as_deref())
-            .bind("Existing configuration")
-            .bind(&now)
-            .bind(&now)
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -3496,6 +3688,26 @@ pub async fn api_apply_ai_meeting_record<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn listing_an_empty_hotword_table_does_not_seed_it() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE hotwords(id TEXT PRIMARY KEY,term TEXT NOT NULL,replacement_from TEXT,category TEXT NOT NULL,scope TEXT NOT NULL,source TEXT NOT NULL,confidence REAL NOT NULL,enabled INTEGER NOT NULL,usage_count INTEGER NOT NULL DEFAULT 0,tags TEXT NOT NULL DEFAULT '[]',updated_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(list_hotwords(&pool).await.unwrap().is_empty());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM hotwords")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn speaker_prefix_is_separated_from_text() {

@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use dirs;
 use log::info as log_info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -112,11 +111,8 @@ impl<R: Runtime> ConsentManager<R> {
 
     /// Get the path where notification settings are stored
     fn get_settings_path() -> Result<PathBuf> {
-        let mut path =
-            dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
-
-        path.push("calmee");
-        path.push("notifications.json");
+        let path =
+            crate::app_paths::notification_settings_path().map_err(|error| anyhow!(error))?;
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {

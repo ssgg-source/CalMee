@@ -1,6 +1,6 @@
 use super::{
-    DiarizationInputSegment, DiarizationResult, FunAsrConfig, FunAsrResult, FunAsrStatus,
-    FunAsrStreamingResult, SpeakerReclusterStatus,
+    DiarizationInputSegment, DiarizationResult, FunAsrConfig, FunAsrResult, FunAsrRuntimeStatus,
+    FunAsrStatus, FunAsrStreamingResult, SpeakerReclusterStatus,
 };
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
@@ -31,57 +31,120 @@ fn first_existing(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathB
     candidates.into_iter().find(|path| path.exists())
 }
 
-fn bundle_resources_dir() -> Option<PathBuf> {
-    let executable = std::env::current_exe().ok()?;
-    let macos_dir = executable.parent()?;
-    let contents_dir = macos_dir.parent()?;
-    Some(contents_dir.join("Resources"))
-}
-
 fn script_path() -> Result<PathBuf> {
     let mut candidates = vec![
         development_root().join("funasr_sidecar/main.py"),
         PathBuf::from("funasr_sidecar/main.py"),
     ];
-    if let Some(resource_dir) = bundle_resources_dir() {
+    if let Ok(resource_dir) = crate::app_paths::resource_root() {
         candidates.insert(0, resource_dir.join("funasr_sidecar/main.py"));
         candidates.insert(1, resource_dir.join("_up_/_up_/funasr_sidecar/main.py"));
     }
     first_existing(candidates).ok_or_else(|| anyhow!("CalMee FunASR sidecar script was not found"))
 }
 
-fn python_path() -> Result<PathBuf> {
+fn python_path() -> Result<(PathBuf, &'static str)> {
     if let Ok(value) = std::env::var("CALMEE_FUNASR_PYTHON") {
         let path = PathBuf::from(value);
         if path.exists() {
-            return Ok(path);
+            return Ok((path, "override"));
         }
+        return Err(anyhow!(
+            "The configured CalMee FunASR runtime does not exist. Check CALMEE_FUNASR_PYTHON."
+        ));
     }
-    let mut candidates = vec![
+    if let Ok(path) = super::runtime_installer::active_python() {
+        return Ok((path, "managed"));
+    }
+    if let Some(path) = first_existing([
         development_root().join(".venv-funasr/bin/python"),
         development_root().join(".venv-funasr/Scripts/python.exe"),
-    ];
-    if let Some(resource_dir) = bundle_resources_dir() {
-        candidates.insert(0, resource_dir.join("funasr-runtime/bin/python3"));
-        candidates.insert(1, resource_dir.join("funasr-runtime/python.exe"));
-    }
-    if let Some(path) = first_existing(candidates) {
-        return Ok(path);
-    }
-    for command in ["python3.12", "python3.11", "python3"] {
-        if let Ok(path) = which::which(command) {
-            return Ok(path);
-        }
+    ]) {
+        return Ok((path, "development"));
     }
     Err(anyhow!(
-        "FunASR Python runtime is missing. Run scripts/setup-funasr.sh or set CALMEE_FUNASR_PYTHON."
+        "CalMee's isolated FunASR runtime has not been installed. Choose a local model to review and install the runtime first. System Python is not used."
     ))
+}
+
+fn managed_cache_paths() -> Result<(PathBuf, PathBuf)> {
+    let modelscope = crate::app_paths::funasr_modelscope_cache().map_err(anyhow::Error::msg)?;
+    let huggingface = crate::app_paths::funasr_huggingface_cache().map_err(anyhow::Error::msg)?;
+    std::fs::create_dir_all(&modelscope)?;
+    std::fs::create_dir_all(&huggingface)?;
+    Ok((modelscope, huggingface))
+}
+
+pub async fn runtime_status() -> FunAsrRuntimeStatus {
+    let (python, source) = match python_path() {
+        Ok(value) => value,
+        Err(error) => {
+            return FunAsrRuntimeStatus {
+                available: false,
+                source: None,
+                message: error.to_string(),
+            }
+        }
+    };
+    let script = match script_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return FunAsrRuntimeStatus {
+                available: false,
+                source: Some(source.into()),
+                message: error.to_string(),
+            }
+        }
+    };
+    let (modelscope_cache, huggingface_cache) = match managed_cache_paths() {
+        Ok(paths) => paths,
+        Err(error) => {
+            return FunAsrRuntimeStatus {
+                available: false,
+                source: Some(source.into()),
+                message: format!("Could not prepare CalMee's private model directory: {error}"),
+            }
+        }
+    };
+    match tokio::process::Command::new(python)
+        .arg(script)
+        .arg("--self-test")
+        .env("MODELSCOPE_CACHE", &modelscope_cache)
+        .env("HF_HOME", &huggingface_cache)
+        .env("HUGGINGFACE_HUB_CACHE", huggingface_cache.join("hub"))
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => FunAsrRuntimeStatus {
+            available: true,
+            source: Some(source.into()),
+            message: "FunASR runtime is ready.".into(),
+        },
+        Ok(output) => {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            FunAsrRuntimeStatus {
+                available: false,
+                source: Some(source.into()),
+                message: if detail.is_empty() {
+                    "The CalMee FunASR runtime failed its self-test.".into()
+                } else {
+                    format!("The CalMee FunASR runtime is incomplete: {detail}")
+                },
+            }
+        }
+        Err(error) => FunAsrRuntimeStatus {
+            available: false,
+            source: Some(source.into()),
+            message: format!("Could not start the CalMee FunASR runtime: {error}"),
+        },
+    }
 }
 
 impl Sidecar {
     async fn start() -> Result<Self> {
-        let python = python_path()?;
+        let (python, _) = python_path()?;
         let script = script_path()?;
+        let (modelscope_cache, huggingface_cache) = managed_cache_paths()?;
         log::info!(
             "Starting CalMee FunASR sidecar: {} {}",
             python.display(),
@@ -92,6 +155,9 @@ impl Sidecar {
             .arg("--stdio")
             .env("PYTHONUNBUFFERED", "1")
             .env("MODELSCOPE_LOG_LEVEL", "30")
+            .env("MODELSCOPE_CACHE", &modelscope_cache)
+            .env("HF_HOME", &huggingface_cache)
+            .env("HUGGINGFACE_HUB_CACHE", huggingface_cache.join("hub"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -199,6 +265,10 @@ pub async fn load(config: &FunAsrConfig) -> Result<FunAsrStatus> {
     with_sidecar(json!({"action": "load", "config": config}), None).await
 }
 
+pub async fn download(config: &FunAsrConfig) -> Result<Value> {
+    with_sidecar(json!({"action": "download", "config": config}), None).await
+}
+
 pub async fn stream_start(config: &FunAsrConfig) -> Result<FunAsrStatus> {
     with_sidecar(json!({"action": "stream_start", "config": config}), None).await
 }
@@ -226,17 +296,15 @@ pub async fn unload() -> Result<FunAsrStatus> {
         loaded: false,
         model: None,
         device: None,
+        model_path: None,
     })
 }
 
 pub async fn transcribe(config: &FunAsrConfig, samples: &[f32]) -> Result<FunAsrResult> {
     let cache_dir = std::env::var("CALMEE_FUNASR_CACHE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::cache_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("CalMee/funasr-audio")
-        });
+        .map_or_else(|_| crate::app_paths::funasr_audio_cache(), Ok)
+        .map_err(anyhow::Error::msg)?;
     tokio::fs::create_dir_all(&cache_dir).await?;
     let path = cache_dir.join(format!("{}.wav", Uuid::new_v4()));
     write_wav(&path, samples, 16_000).await?;

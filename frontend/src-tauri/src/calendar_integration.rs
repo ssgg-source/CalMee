@@ -214,21 +214,62 @@ struct NativeEvent {
     uid: String,
     calendar: String,
     title: String,
-    start_ms: i64,
-    end_ms: i64,
+    #[serde(default, alias = "start_ms")]
+    start_ms: Option<i64>,
+    #[serde(default, alias = "end_ms")]
+    end_ms: Option<i64>,
     location: Option<String>,
     notes: Option<String>,
+    #[serde(default, alias = "all_day")]
+    all_day: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct NativeCalendar {
     name: String,
+    #[serde(default)]
+    color: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NativePayload {
     calendars: Vec<NativeCalendar>,
     events: Vec<NativeEvent>,
+}
+
+fn native_calendar_color(values: Option<&[f64]>) -> String {
+    let Some(values) = values.filter(|values| values.len() >= 3) else {
+        return "#FF9F0A".into();
+    };
+    let maximum = values[..3].iter().copied().fold(0.0_f64, f64::max);
+    let channels: [u8; 3] = std::array::from_fn(|index| {
+        let value = values[index];
+        let normalized = if maximum <= 1.0 {
+            value * 255.0
+        } else if maximum > 255.0 {
+            value / 257.0
+        } else {
+            value
+        };
+        normalized.round().clamp(0.0, 255.0) as u8
+    });
+    format!("#{:02X}{:02X}{:02X}", channels[0], channels[1], channels[2])
+}
+
+async fn upsert_native_calendar(
+    pool: &SqlitePool,
+    calendar: &NativeCalendar,
+) -> Result<(), String> {
+    sqlx::query("INSERT INTO calendar_collections (id,source,account_key,href,name,color,read_only,enabled,updated_at) VALUES (?,'local','macOS',?,?,?,1,1,?) ON CONFLICT(source,account_key,href) DO UPDATE SET name=excluded.name,color=excluded.color,updated_at=excluded.updated_at")
+        .bind(format!("calendar-{}", Uuid::new_v4()))
+        .bind(&calendar.name)
+        .bind(&calendar.name)
+        .bind(native_calendar_color(calendar.color.as_deref()))
+        .bind(Utc::now().to_rfc3339())
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 async fn read_settings(pool: &SqlitePool) -> Result<CalendarSettings, String> {
@@ -1095,7 +1136,48 @@ async fn sync_native(pool: &SqlitePool, start: &str, end: &str) -> Result<usize,
     let end_ms = DateTime::parse_from_rfc3339(end)
         .map_err(|e| e.to_string())?
         .timestamp_millis();
-    let script = r#"function run(a){const C=Application('Calendar'),s=Number(a[0]),e=Number(a[1]),events=[],calendars=[];C.calendars().forEach(c=>{const name=String(c.name());calendars.push({name});c.events().forEach(v=>{try{const b=v.startDate().getTime();if(b>=s&&b<e)events.push({uid:String(v.uid()),calendar:name,title:String(v.summary()||'Untitled event'),start_ms:b,end_ms:v.endDate().getTime(),location:String(v.location()||''),notes:String(v.description()||'')});}catch(_){}})});return JSON.stringify({calendars,events});}"#;
+    let script = r#"
+function calendarColor(calendar) {
+  try {
+    const rgb = calendar.color();
+    if (Array.isArray(rgb) && rgb.length >= 3) {
+      return rgb.slice(0, 3).map(Number);
+    }
+  } catch (_) {}
+  return null;
+}
+function run(args) {
+  const Calendar = Application('Calendar');
+  const rangeStart = Number(args[0]);
+  const rangeEnd = Number(args[1]);
+  const events = [];
+  const calendars = [];
+  Calendar.calendars().forEach(calendar => {
+    const name = String(calendar.name());
+    calendars.push({name, color: calendarColor(calendar)});
+    calendar.events().forEach(event => {
+      try {
+        const start = event.startDate();
+        const end = event.endDate();
+        const startMs = start && start.getTime();
+        if (Number.isFinite(startMs) && startMs >= rangeStart && startMs < rangeEnd) {
+          events.push({
+            uid: String(event.uid()),
+            calendar: name,
+            title: String(event.summary() || 'Untitled event'),
+            startMs,
+            endMs: end && Number.isFinite(end.getTime()) ? end.getTime() : null,
+            location: String(event.location() || ''),
+            notes: String(event.description() || ''),
+            allDay: Boolean(event.alldayEvent())
+          });
+        }
+      } catch (_) {}
+    });
+  });
+  return JSON.stringify({calendars, events});
+}
+"#;
     let output = tokio::task::spawn_blocking(move || {
         Command::new("osascript")
             .args([
@@ -1121,11 +1203,16 @@ async fn sync_native(pool: &SqlitePool, start: &str, end: &str) -> Result<usize,
     let native: NativePayload = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid calendar response format: {}", e))?;
     for calendar in &native.calendars {
-        sqlx::query("INSERT INTO calendar_collections (id,source,account_key,href,name,color,read_only,enabled,updated_at) VALUES (?,'local','macOS',?,?,'#FF9F0A',1,1,?) ON CONFLICT(source,account_key,href) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at")
-            .bind(format!("calendar-{}", Uuid::new_v4())).bind(&calendar.name).bind(&calendar.name).bind(Utc::now().to_rfc3339())
-            .execute(pool).await.map_err(|e| e.to_string())?;
+        upsert_native_calendar(pool, calendar).await?;
     }
+    let mut imported = 0usize;
     for item in &native.events {
+        let Some(start_ms) = item.start_ms else {
+            continue;
+        };
+        let Some(start_at) = Utc.timestamp_millis_opt(start_ms).single() else {
+            continue;
+        };
         let calendar_id = sqlx::query_scalar::<_, String>("SELECT id FROM calendar_collections WHERE source='local' AND account_key='macOS' AND href=?")
             .bind(&item.calendar).fetch_one(pool).await.map_err(|e| e.to_string())?;
         upsert_event(
@@ -1136,14 +1223,10 @@ async fn sync_native(pool: &SqlitePool, start: &str, end: &str) -> Result<usize,
                 external_id: item.uid.clone(),
                 calendar_name: Some(item.calendar.clone()),
                 title: item.title.clone(),
-                start_at: Utc
-                    .timestamp_millis_opt(item.start_ms)
-                    .single()
-                    .unwrap()
-                    .to_rfc3339(),
-                end_at: Utc
-                    .timestamp_millis_opt(item.end_ms)
-                    .single()
+                start_at: start_at.to_rfc3339(),
+                end_at: item
+                    .end_ms
+                    .and_then(|value| Utc.timestamp_millis_opt(value).single())
                     .map(|v| v.to_rfc3339()),
                 location: item.location.clone().filter(|v| !v.is_empty()),
                 notes: item.notes.clone().filter(|v| !v.is_empty()),
@@ -1151,12 +1234,13 @@ async fn sync_native(pool: &SqlitePool, start: &str, end: &str) -> Result<usize,
                 calendar_id: Some(calendar_id),
                 href: None,
                 etag: None,
-                all_day: false,
+                all_day: item.all_day,
             },
         )
         .await?;
+        imported += 1;
     }
-    Ok(native.events.len())
+    Ok(imported)
 }
 
 async fn upsert_event(pool: &SqlitePool, event: &CalendarEvent) -> Result<(), String> {
@@ -1203,6 +1287,70 @@ pub async fn api_sync_calendars<R: Runtime>(
 #[cfg(test)]
 mod external_transcript_tests {
     use super::*;
+
+    #[test]
+    fn native_calendar_payload_accepts_camel_case_dates_all_day_and_color() {
+        let payload: NativePayload = serde_json::from_str(
+            r##"{"calendars":[{"name":"Work","color":[51,102,204]}],"events":[{"uid":"one","calendar":"Work","title":"Holiday","startMs":1787068800000,"endMs":1787155200000,"location":"","notes":"","allDay":true}]}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            native_calendar_color(payload.calendars[0].color.as_deref()),
+            "#3366CC"
+        );
+        assert_eq!(payload.events[0].start_ms, Some(1_787_068_800_000));
+        assert!(payload.events[0].all_day);
+    }
+
+    #[test]
+    fn native_calendar_payload_tolerates_legacy_or_missing_dates_per_event() {
+        let payload: NativePayload = serde_json::from_str(
+            r#"{"calendars":[],"events":[{"uid":"old","calendar":"Local","title":"Old","start_ms":1000,"end_ms":2000},{"uid":"broken","calendar":"Local","title":"Broken"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(payload.events[0].start_ms, Some(1000));
+        assert_eq!(payload.events[0].end_ms, Some(2000));
+        assert_eq!(payload.events[1].start_ms, None);
+    }
+
+    #[tokio::test]
+    async fn native_calendar_upsert_matches_the_collection_schema() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE calendar_collections (id TEXT PRIMARY KEY,source TEXT NOT NULL,account_key TEXT NOT NULL,href TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL,read_only INTEGER NOT NULL,enabled INTEGER NOT NULL,updated_at TEXT NOT NULL,UNIQUE(source,account_key,href))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        upsert_native_calendar(
+            &pool,
+            &NativeCalendar {
+                name: "Local".into(),
+                color: Some(vec![51.0, 102.0, 204.0]),
+            },
+        )
+        .await
+        .unwrap();
+        let stored: (String, String) =
+            sqlx::query_as("SELECT name,color FROM calendar_collections")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, ("Local".into(), "#3366CC".into()));
+    }
+
+    #[test]
+    fn native_calendar_colors_support_float_byte_and_sixteen_bit_ranges() {
+        assert_eq!(native_calendar_color(Some(&[1.0, 0.5, 0.0])), "#FF8000");
+        assert_eq!(native_calendar_color(Some(&[255.0, 128.0, 0.0])), "#FF8000");
+        assert_eq!(
+            native_calendar_color(Some(&[65_535.0, 32_768.0, 0.0])),
+            "#FF8000"
+        );
+        assert_eq!(native_calendar_color(None), "#FF9F0A");
+    }
 
     #[test]
     fn parses_speaker_headers_from_external_exports() {
