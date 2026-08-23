@@ -4,7 +4,7 @@ use regex::Regex;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use tauri::{AppHandle, Runtime};
 use uuid::Uuid;
@@ -233,6 +233,8 @@ struct NativeCalendar {
 
 #[derive(Debug, Deserialize)]
 struct NativePayload {
+    #[serde(default)]
+    complete: bool,
     calendars: Vec<NativeCalendar>,
     events: Vec<NativeEvent>,
 }
@@ -1152,11 +1154,13 @@ function run(args) {
   const rangeEnd = Number(args[1]);
   const events = [];
   const calendars = [];
+  let complete = true;
   Calendar.calendars().forEach(calendar => {
-    const name = String(calendar.name());
-    calendars.push({name, color: calendarColor(calendar)});
-    calendar.events().forEach(event => {
-      try {
+    try {
+      const name = String(calendar.name());
+      calendars.push({name, color: calendarColor(calendar)});
+      calendar.events().forEach(event => {
+        try {
         const start = event.startDate();
         const end = event.endDate();
         const startMs = start && start.getTime();
@@ -1172,10 +1176,15 @@ function run(args) {
             allDay: Boolean(event.alldayEvent())
           });
         }
-      } catch (_) {}
-    });
+        } catch (_) {
+          complete = false;
+        }
+      });
+    } catch (_) {
+      complete = false;
+    }
   });
-  return JSON.stringify({calendars, events});
+  return JSON.stringify({complete, calendars, events});
 }
 "#;
     let output = tokio::task::spawn_blocking(move || {
@@ -1202,6 +1211,22 @@ function run(args) {
     }
     let native: NativePayload = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid calendar response format: {}", e))?;
+    if !native.complete {
+        return Err(
+            "The macOS calendar snapshot was incomplete. CalMee kept the existing calendar cache unchanged."
+                .into(),
+        );
+    }
+    let seen_calendar_names = native
+        .calendars
+        .iter()
+        .map(|calendar| calendar.name.clone())
+        .collect::<HashSet<_>>();
+    let seen_event_uids = native
+        .events
+        .iter()
+        .map(|event| event.uid.clone())
+        .collect::<HashSet<_>>();
     for calendar in &native.calendars {
         upsert_native_calendar(pool, calendar).await?;
     }
@@ -1240,7 +1265,82 @@ function run(args) {
         .await?;
         imported += 1;
     }
+    reconcile_native_snapshot(pool, start, end, &seen_event_uids, &seen_calendar_names).await?;
     Ok(imported)
+}
+
+async fn reconcile_native_snapshot(
+    pool: &SqlitePool,
+    start: &str,
+    end: &str,
+    seen_event_uids: &HashSet<String>,
+    seen_calendar_names: &HashSet<String>,
+) -> Result<usize, String> {
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let cached_range_events = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,external_id FROM calendar_events WHERE source='local' AND datetime(start_at)>=datetime(?) AND datetime(start_at)<datetime(?)",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut removed = 0usize;
+    for (event_id, external_id) in cached_range_events {
+        if seen_event_uids.contains(&external_id) {
+            continue;
+        }
+        sqlx::query("UPDATE meetings SET calendar_event_id=NULL WHERE calendar_event_id=?")
+            .bind(&event_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+        removed += sqlx::query("DELETE FROM calendar_events WHERE id=?")
+            .bind(&event_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?
+            .rows_affected() as usize;
+    }
+
+    let cached_calendars = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,href FROM calendar_collections WHERE source='local' AND account_key='macOS'",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+    for (calendar_id, calendar_name) in cached_calendars {
+        if seen_calendar_names.contains(&calendar_name) {
+            continue;
+        }
+        let event_ids = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM calendar_events WHERE source='local' AND calendar_id=?",
+        )
+        .bind(&calendar_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+        for event_id in event_ids {
+            sqlx::query("UPDATE meetings SET calendar_event_id=NULL WHERE calendar_event_id=?")
+                .bind(&event_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            removed += sqlx::query("DELETE FROM calendar_events WHERE id=?")
+                .bind(&event_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?
+                .rows_affected() as usize;
+        }
+        sqlx::query("DELETE FROM calendar_collections WHERE id=?")
+            .bind(&calendar_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(removed)
 }
 
 async fn upsert_event(pool: &SqlitePool, event: &CalendarEvent) -> Result<(), String> {
@@ -1339,6 +1439,113 @@ mod external_transcript_tests {
                 .await
                 .unwrap();
         assert_eq!(stored, ("Local".into(), "#3366CC".into()));
+    }
+
+    #[tokio::test]
+    async fn native_snapshot_removes_missing_events_and_deleted_calendars_atomically() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE calendar_collections (id TEXT PRIMARY KEY,source TEXT NOT NULL,account_key TEXT NOT NULL,href TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL,read_only INTEGER NOT NULL,enabled INTEGER NOT NULL,updated_at TEXT NOT NULL,UNIQUE(source,account_key,href))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE calendar_events (id TEXT PRIMARY KEY,source TEXT NOT NULL,external_id TEXT NOT NULL,calendar_name TEXT,title TEXT NOT NULL,start_at TEXT NOT NULL,end_at TEXT,location TEXT,notes TEXT,meeting_id TEXT,updated_at TEXT NOT NULL,calendar_id TEXT,href TEXT,etag TEXT,all_day INTEGER NOT NULL DEFAULT 0,UNIQUE(source,external_id))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY,calendar_event_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, name) in [("calendar-a", "Current"), ("calendar-b", "Deleted")] {
+            sqlx::query("INSERT INTO calendar_collections (id,source,account_key,href,name,color,read_only,enabled,updated_at) VALUES (?,'local','macOS',?,?,'#123456',1,1,'now')")
+                .bind(id)
+                .bind(name)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (id, uid, calendar_id, start_at) in [
+            (
+                "event-keep",
+                "uid-keep",
+                "calendar-a",
+                "2026-08-10T08:00:00+00:00",
+            ),
+            (
+                "event-delete",
+                "uid-delete",
+                "calendar-a",
+                "2026-08-11T08:00:00+00:00",
+            ),
+            (
+                "event-overlap",
+                "uid-overlap",
+                "calendar-a",
+                "2026-07-31T23:00:00+00:00",
+            ),
+            (
+                "event-deleted-calendar",
+                "uid-old-calendar",
+                "calendar-b",
+                "2026-09-10T08:00:00+00:00",
+            ),
+        ] {
+            sqlx::query("INSERT INTO calendar_events (id,source,external_id,title,start_at,updated_at,calendar_id) VALUES (?,'local',?,'Event',?,'now',?)")
+                .bind(id)
+                .bind(uid)
+                .bind(start_at)
+                .bind(calendar_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (meeting_id, event_id) in [
+            ("meeting-one", "event-delete"),
+            ("meeting-two", "event-deleted-calendar"),
+        ] {
+            sqlx::query("INSERT INTO meetings (id,calendar_event_id) VALUES (?,?)")
+                .bind(meeting_id)
+                .bind(event_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let removed = reconcile_native_snapshot(
+            &pool,
+            "2026-08-01T00:00:00Z",
+            "2026-09-01T00:00:00Z",
+            &HashSet::from(["uid-keep".to_string()]),
+            &HashSet::from(["Current".to_string()]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(removed, 2);
+        let remaining =
+            sqlx::query_scalar::<_, String>("SELECT id FROM calendar_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, vec!["event-keep", "event-overlap"]);
+        let calendars =
+            sqlx::query_scalar::<_, String>("SELECT id FROM calendar_collections ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(calendars, vec!["calendar-a"]);
+        let linked_meetings = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM meetings WHERE calendar_event_id IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(linked_meetings, 0);
     }
 
     #[test]
