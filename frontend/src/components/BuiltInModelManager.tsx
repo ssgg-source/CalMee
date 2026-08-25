@@ -127,7 +127,7 @@ export function BuiltInModelManager({
           });
           // Refresh models list
           fetchModels();
-          toast.success(`Model ${model} downloaded successfully`);
+          // Global download feedback owns the completion notification.
         }
 
         // Handle cancelled status

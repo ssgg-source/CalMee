@@ -24,7 +24,7 @@ import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { MeetingTabs } from '@/components/MeetingTabs'
-import { LanguageProvider } from '@/contexts/LanguageContext'
+import { LanguageProvider, useLanguage } from '@/contexts/LanguageContext'
 import { usePathname } from 'next/navigation'
 import { appCacheDir, join } from '@tauri-apps/api/path'
 import { mkdir, writeFile } from '@tauri-apps/plugin-fs'
@@ -105,25 +105,27 @@ function AppFrame({ children }: { children: React.ReactNode }) {
   )
 }
 
-function DatabaseStartupScreen({ status }: { status: DatabaseStartupStatus }) {
-  const failed = status.status === 'failed';
+function DatabaseStartupScreen({ status, detailed }: { status: DatabaseStartupStatus | null; detailed: boolean }) {
+  const { t } = useLanguage();
+  if (!detailed && status?.status !== 'failed') {
+    return <main className="h-screen bg-[#f8f7fb]" aria-label={t('startup.opening')} />;
+  }
+  const failed = status?.status === 'failed';
   return (
     <main className="flex h-screen items-center justify-center bg-[#f8f7fb] px-6 text-slate-900">
       <section className="w-full max-w-xl rounded-3xl border border-violet-100 bg-white p-8 shadow-sm">
         <p className="text-sm font-medium text-violet-600">CalMee</p>
         <h1 className="mt-2 text-2xl font-semibold">
-          {failed ? '无法打开本地数据' : '正在准备本地数据…'}
+          {failed ? t('startup.failedTitle') : t('startup.opening')}
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          {failed
-            ? 'CalMee 没有进入功能页面，以避免在数据库未就绪时产生误导性错误。你的原数据库没有被修改。'
-            : '首次启动会在开源版专属目录中创建全新的公共数据库。'}
+          {failed ? t('startup.failedDescription') : t('startup.waitDescription')}
         </p>
         {failed && (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4">
-            <p className="text-xs font-semibold text-red-700">启动详情</p>
-            <p className="mt-2 break-words font-mono text-xs leading-5 text-red-700">{status.message}</p>
-          </div>
+          <details className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
+            <summary className="cursor-pointer text-xs font-semibold">{t('startup.technicalDetails')}</summary>
+            <p className="mt-2 break-words font-mono text-xs leading-5">{status?.status === 'failed' ? status.message : ''}</p>
+          </details>
         )}
         {failed && (
           <button
@@ -131,7 +133,7 @@ function DatabaseStartupScreen({ status }: { status: DatabaseStartupStatus }) {
             onClick={() => window.location.reload()}
             className="mt-6 h-10 rounded-xl bg-violet-600 px-5 text-sm font-medium text-white hover:bg-violet-700"
           >
-            重新尝试
+            {t('startup.retry')}
           </button>
         )}
       </section>
@@ -147,8 +149,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
-  const [onboardingCompleted, setOnboardingCompleted] = useState(false)
-  const [databaseStartup, setDatabaseStartup] = useState<DatabaseStartupStatus>({ status: 'initializing' })
+  const [databaseStartup, setDatabaseStartup] = useState<DatabaseStartupStatus | null>(null)
+  const [showStartupWait, setShowStartupWait] = useState(false)
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)
@@ -177,6 +179,15 @@ export default function RootLayout({
   }, [])
 
   useEffect(() => {
+    if (databaseStartup?.status === 'ready' || databaseStartup?.status === 'failed') {
+      setShowStartupWait(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowStartupWait(true), 600);
+    return () => window.clearTimeout(timer);
+  }, [databaseStartup?.status]);
+
+  useEffect(() => {
     // A stable render proves the new webpack graph loaded successfully. Clear
     // the throttle so a genuinely separate future hot-reload failure can heal.
     const timer = window.setTimeout(() => {
@@ -191,12 +202,11 @@ export default function RootLayout({
   }, []);
 
   useEffect(() => {
+    if (databaseStartup?.status !== 'ready') return;
     // Check onboarding status first
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
         const isComplete = status?.completed ?? false
-        setOnboardingCompleted(isComplete)
-
         if (!isComplete) {
           console.log('[Layout] Onboarding not completed, showing onboarding flow')
           setShowOnboarding(true)
@@ -208,9 +218,8 @@ export default function RootLayout({
         console.error('[Layout] Failed to check onboarding status:', error)
         // Default to showing onboarding if we can't check
         setShowOnboarding(true)
-        setOnboardingCompleted(false)
       })
-  }, [])
+  }, [databaseStartup?.status])
 
   // Disable context menu in production
   useEffect(() => {
@@ -360,21 +369,13 @@ export default function RootLayout({
     setShowImportDialog(true);
   }, []);
 
-  const handleOnboardingComplete = () => {
-    console.log('[Layout] Onboarding completed, reloading app')
-    setShowOnboarding(false)
-    setOnboardingCompleted(true)
-    // Optionally reload the window to ensure all state is fresh
-    window.location.reload()
-  }
-
   return (
     <html lang="en">
       <head><script dangerouslySetInnerHTML={{ __html: chunkRecoveryScript }} /></head>
       <body className="font-sans antialiased">
         <LanguageProvider>
-          {databaseStartup.status !== 'ready' ? (
-            <DatabaseStartupScreen status={databaseStartup} />
+          {databaseStartup?.status !== 'ready' ? (
+            <DatabaseStartupScreen status={databaseStartup} detailed={showStartupWait || databaseStartup?.status === 'failed'} />
           ) : <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
@@ -391,7 +392,7 @@ export default function RootLayout({
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (
-                                <OnboardingFlow onComplete={handleOnboardingComplete} />
+                                <OnboardingFlow />
                               ) : (
                                 <AppFrame>{children}</AppFrame>
                               )}

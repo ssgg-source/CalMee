@@ -7,15 +7,30 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ChevronUp, Maximize2, Minus, NotebookPen, Pause, Play, Square } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
-import { useConfig } from "@/contexts/ConfigContext";
 import { recordingService } from "@/services/recordingService";
 import { LiveMeetingNotes } from "@/components/LiveMeetingNotes";
 import { Button } from "@/components/ui/button";
 
 const BAR_WIDTH = 242;
 const BAR_HEIGHT = 52;
-const NOTES_HEIGHT = 270;
+const NOTES_WIDTH = 460;
+const NOTES_HEIGHT = 400;
+const NOTES_MIN_WIDTH = 360;
+const NOTES_MIN_HEIGHT = 280;
 const BUTTON_SIZE = 34;
+const NOTES_SIZE_KEY = "calmee-recording-overlay-notes-size";
+
+const savedNotesSize = () => {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(NOTES_SIZE_KEY) || "null") as { width?: number; height?: number } | null;
+    return {
+      width: Math.max(NOTES_MIN_WIDTH, Number(value?.width) || NOTES_WIDTH),
+      height: Math.max(NOTES_MIN_HEIGHT, Number(value?.height) || NOTES_HEIGHT),
+    };
+  } catch {
+    return { width: NOTES_WIDTH, height: NOTES_HEIGHT };
+  }
+};
 
 const clock = (seconds?: number | null) => {
   const value = Math.max(0, Math.floor(seconds || 0));
@@ -26,13 +41,11 @@ export default function RecordingOverlayPage() {
   const { locale } = useLanguage();
   const zh = locale === "zh-CN";
   const recording = useRecordingState();
-  const { transcriptModelConfig } = useConfig();
   const [mode, setMode] = useState<"bar" | "button">("bar");
   const [notesOpen, setNotesOpen] = useState(false);
   const [pausePending, setPausePending] = useState(false);
   const [optimisticPaused, setOptimisticPaused] = useState<boolean | null>(null);
   const [displayDuration, setDisplayDuration] = useState(0);
-  const liveTranscriptionEnabled = transcriptModelConfig.provider !== "none";
 
   useEffect(() => {
     const base = Math.max(0, recording.recordingDuration || 0);
@@ -57,10 +70,46 @@ export default function RecordingOverlayPage() {
   }, []);
 
   useEffect(() => {
-    const size = mode === "button"
-      ? new LogicalSize(BUTTON_SIZE, BUTTON_SIZE)
-      : new LogicalSize(BAR_WIDTH, notesOpen ? NOTES_HEIGHT : BAR_HEIGHT);
-    void getCurrentWindow().setSize(size);
+    const overlay = getCurrentWindow();
+    const updateSize = async () => {
+      if (mode === "button") {
+        await overlay.setMinSize(null);
+        await overlay.setResizable(false);
+        await overlay.setSize(new LogicalSize(BUTTON_SIZE, BUTTON_SIZE));
+        return;
+      }
+      if (notesOpen) {
+        const size = savedNotesSize();
+        await overlay.setResizable(true);
+        await overlay.setMinSize(new LogicalSize(NOTES_MIN_WIDTH, NOTES_MIN_HEIGHT));
+        await overlay.setSize(new LogicalSize(size.width, size.height));
+        return;
+      }
+      await overlay.setMinSize(null);
+      await overlay.setResizable(false);
+      await overlay.setSize(new LogicalSize(BAR_WIDTH, BAR_HEIGHT));
+    };
+    void updateSize();
+  }, [mode, notesOpen]);
+
+  useEffect(() => {
+    if (mode !== "bar" || !notesOpen) return;
+    let timer: number | undefined;
+    const rememberSize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (window.innerWidth < NOTES_MIN_WIDTH || window.innerHeight < NOTES_MIN_HEIGHT) return;
+        window.localStorage.setItem(NOTES_SIZE_KEY, JSON.stringify({
+          width: Math.round(window.innerWidth),
+          height: Math.round(window.innerHeight),
+        }));
+      }, 120);
+    };
+    window.addEventListener("resize", rememberSize);
+    return () => {
+      window.removeEventListener("resize", rememberSize);
+      window.clearTimeout(timer);
+    };
   }, [mode, notesOpen]);
 
   useEffect(() => {
@@ -86,14 +135,10 @@ export default function RecordingOverlayPage() {
   const displayPaused = optimisticPaused ?? recording.isPaused;
   const statusColor = displayPaused
     ? "bg-amber-400"
-    : liveTranscriptionEnabled
-      ? "bg-violet-500"
-      : "bg-red-500";
+    : "bg-red-500";
   const statusTitle = displayPaused
     ? (zh ? "录音已暂停" : "Recording paused")
-    : liveTranscriptionEnabled
-      ? (zh ? "正在录音并实时转写" : "Recording with live transcription")
-      : (zh ? "仅录音，未实时转写" : "Recording without live transcription");
+    : (zh ? "正在录音" : "Recording");
 
   const restoreMainWindow = async () => {
     const main = await WebviewWindow.getByLabel("main");
@@ -127,7 +172,7 @@ export default function RecordingOverlayPage() {
 
   return (
     <main className="h-screen bg-transparent">
-      <section className="flex h-full flex-col overflow-hidden rounded-[15px] border border-black/[0.08] bg-white/95 backdrop-blur-xl">
+      <section className="relative flex h-full flex-col overflow-hidden rounded-[15px] border border-black/[0.08] bg-white/95 backdrop-blur-xl">
         <div
           data-tauri-drag-region
           onPointerDown={(event) => {
@@ -165,6 +210,19 @@ export default function RecordingOverlayPage() {
           <div className="min-h-0 flex-1 border-t border-black/[0.06] px-3 py-2">
             <LiveMeetingNotes currentTime={recording.activeDuration || 0} compact />
           </div>
+        )}
+        {notesOpen && (
+          <button
+            type="button"
+            aria-label={zh ? "拖动调整笔记窗口大小" : "Drag to resize notes window"}
+            title={zh ? "拖动调整宽度和高度" : "Drag to resize width and height"}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void getCurrentWindow().startResizeDragging("SouthEast");
+            }}
+            className="absolute bottom-0 right-0 z-30 h-5 w-5 cursor-se-resize bg-[linear-gradient(135deg,transparent_0%,transparent_52%,rgba(148,163,184,.55)_53%,rgba(148,163,184,.55)_59%,transparent_60%,transparent_69%,rgba(148,163,184,.55)_70%,rgba(148,163,184,.55)_76%,transparent_77%)] opacity-70 hover:opacity-100"
+          />
         )}
       </section>
     </main>

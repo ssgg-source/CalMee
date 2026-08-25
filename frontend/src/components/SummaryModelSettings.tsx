@@ -7,6 +7,7 @@ import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal
 import { useLanguage } from '@/contexts/LanguageContext';
 import { RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 type HarnessSetting = { content: string; isCustomized: boolean };
 
@@ -17,6 +18,10 @@ interface SummaryModelSettingsProps {
 export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsProps) {
   const { lt, locale } = useLanguage();
   const zh = locale === 'zh-CN';
+  const showError = useCallback((title: string, error: unknown) => {
+    reportTechnicalError('summary-model-settings', error);
+    toast.error(title, { description: toUserFacingError(error, locale).message });
+  }, [locale]);
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
     model: 'llama3.2:latest',
@@ -38,11 +43,11 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       setSavedHarness(value.content);
       setHarnessCustomized(value.isCustomized);
     } catch (error) {
-      toast.error(zh ? '读取智能记录 Harness 失败' : 'Failed to load the smart-record Harness', { description: String(error) });
+      showError(zh ? '读取智能记录设置失败' : 'Failed to load smart-record settings', error);
     } finally {
       setHarnessLoading(false);
     }
-  }, [zh]);
+  }, [showError, zh]);
 
   useEffect(() => { void loadHarness(); }, [loadHarness]);
 
@@ -56,7 +61,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       setHarnessCustomized(true);
       toast.success(zh ? '智能记录 Harness 已保存' : 'Smart-record Harness saved');
     } catch (error) {
-      toast.error(zh ? '保存 Harness 失败' : 'Failed to save the Harness', { description: String(error) });
+      showError(zh ? '智能记录设置保存失败' : 'Failed to save smart-record settings', error);
     } finally {
       setHarnessSaving(false);
     }
@@ -71,7 +76,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       setHarnessCustomized(false);
       toast.success(zh ? '已恢复 CalMee 默认 Harness' : 'Restored the CalMee default Harness');
     } catch (error) {
-      toast.error(zh ? '恢复默认值失败' : 'Failed to restore defaults', { description: String(error) });
+      showError(zh ? '恢复默认值失败' : 'Failed to restore defaults', error);
     } finally {
       setHarnessSaving(false);
     }

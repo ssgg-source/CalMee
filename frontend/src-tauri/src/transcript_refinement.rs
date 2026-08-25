@@ -104,6 +104,11 @@ pub struct TranscriptRefinementResult {
 pub struct TranscriptRefinementProgress {
     pub meeting_id: String,
     pub percentage: u8,
+    /// Whole-document model calls do not expose measurable work. Keep the
+    /// legacy percentage for compatibility, but clients must not present it
+    /// as determinate progress unless this flag is true.
+    #[serde(default)]
+    pub determinate: bool,
     pub message: String,
     pub completed_chunks: usize,
     pub total_chunks: usize,
@@ -768,6 +773,7 @@ async fn run_transcript_refinement<R: Runtime>(
         let progress = TranscriptRefinementProgress {
             meeting_id: meeting_id.clone(),
             percentage,
+            determinate: false,
             message,
             completed_chunks: 0,
             total_chunks: 1,
@@ -980,6 +986,7 @@ pub async fn api_start_local_transcript_refinement<R: Runtime>(
         progress: Some(TranscriptRefinementProgress {
             meeting_id: meeting_id.clone(),
             percentage: 1,
+            determinate: false,
             message: "Preparing one-pass whole-transcript optimization…".into(),
             completed_chunks: 0,
             total_chunks: 1,
@@ -1050,6 +1057,7 @@ pub async fn api_start_local_transcript_refinement<R: Runtime>(
                 progress: Some(TranscriptRefinementProgress {
                     meeting_id: meeting_id.clone(),
                     percentage: 100,
+                    determinate: true,
                     message: format!(
                         "Optimization complete: {} changed, {} need review",
                         result.changed_count, result.review_count
@@ -1319,6 +1327,17 @@ pub async fn api_batch_update_transcript_refinement_text<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_refinement_progress_is_indeterminate_by_default() {
+        let progress: TranscriptRefinementProgress = serde_json::from_str(
+            r#"{"meetingId":"meeting-1","percentage":72,"message":"processing","completedChunks":0,"totalChunks":1}"#,
+        )
+        .expect("legacy progress payload should remain compatible");
+
+        assert!(!progress.determinate);
+    }
+
     fn segment(id: &str, text: &str) -> RefinementSegment {
         RefinementSegment {
             id: id.into(),

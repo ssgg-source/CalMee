@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 import { TranscriptionModelCard } from './TranscriptionModelCard';
 import {
   Dialog,
@@ -39,7 +40,11 @@ function formatBytes(bytes: number): string {
 }
 
 export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }: Props) {
-  const { lt } = useLanguage();
+  const { lt, locale } = useLanguage();
+  const friendlyError = useCallback((scope: string, error: unknown) => {
+    reportTechnicalError(scope, error);
+    return toUserFacingError(error, locale).message;
+  }, [locale]);
   const [config, setConfig] = useState<FunAsrConfig | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [status, setStatus] = useState<FunAsrStatus | null>(null);
@@ -75,15 +80,15 @@ export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }:
     ]).then(([saved, available]) => {
       setConfig(saved);
       setProfiles(available);
-    }).catch(error => toast.error(lt('Failed to load models'), { description: String(error) }));
+    }).catch(error => toast.error(lt('Failed to load models'), { description: friendlyError('funasr-load-models', error) }));
     void refreshState().catch(error => {
-      setRuntime({ available: false, message: String(error) });
+      setRuntime({ available: false, message: friendlyError('funasr-runtime-status', error) });
       setStatus({ ready: false, loaded: false });
     });
     invoke<LegacyImportPreview>('funasr_get_legacy_model_import_preview')
       .then(setLegacyImport)
       .catch(() => setLegacyImport(null));
-  }, [family, lt, refreshState]);
+  }, [family, friendlyError, lt, refreshState]);
 
   const activateModel = async (model: string) => {
     if (!config || busyModel) return;
@@ -104,7 +109,7 @@ export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }:
       toast.success(lt('Switched to {model}', { model: profiles.find(item => item.id === model)?.name || model }));
     } catch (error) {
       await refreshState().catch(() => undefined);
-      toast.error(lt('Failed to prepare model'), { description: String(error) });
+      toast.error(lt('Failed to prepare model'), { description: friendlyError('funasr-prepare-model', error) });
     } finally {
       setRequestedModel(null);
       setBusyModel(null);
@@ -124,7 +129,7 @@ export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }:
       });
     } catch (error) {
       await refreshState().catch(() => undefined);
-      toast.error(lt('Model download failed'), { description: String(error) });
+      toast.error(lt('Model download failed'), { description: friendlyError('funasr-download-model', error) });
     } finally {
       setBusyModel(null);
       setBusyAction(null);
@@ -151,7 +156,7 @@ export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }:
         description: lt('Freed {size} of disk space.', { size: formatBytes(freed) }),
       });
     } catch (error) {
-      toast.error(lt('Failed to delete model'), { description: String(error) });
+      toast.error(lt('Failed to delete model'), { description: friendlyError('funasr-delete-model', error) });
     } finally {
       setBusyModel(null);
       setBusyAction(null);
@@ -172,7 +177,7 @@ export function FunAsrSettings({ onSelected, family = 'funasr', selectedModel }:
         description: lt('Copied {size}. The original cache was not changed.', { size: formatBytes(copied) }),
       });
     } catch (error) {
-      toast.error(lt('Failed to import existing models'), { description: String(error) });
+      toast.error(lt('Failed to import existing models'), { description: friendlyError('funasr-import-models', error) });
     } finally {
       setImportingLegacy(false);
     }

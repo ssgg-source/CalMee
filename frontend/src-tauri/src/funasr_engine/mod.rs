@@ -130,6 +130,12 @@ pub struct FunAsrStreamingResult {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FunAsrPunctuationResult {
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SpeakerReclusterStatus {
     #[serde(default)]
     pub available: bool,

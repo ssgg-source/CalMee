@@ -9,10 +9,8 @@ import {
 } from "@/contexts/RecordingStateContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { recordingService } from "@/services/recordingService";
-import { clearLiveMeetingNotes } from "@/lib/live-meeting-notes";
 import Analytics from "@/lib/analytics";
 import { showRecordingNotification } from "@/lib/recordingNotification";
-import { liveCaptionsEnabled as readLiveCaptionsEnabled } from "@/lib/live-captions";
 
 interface UseRecordingStartReturn {
   handleRecordingStart: () => Promise<void>;
@@ -27,9 +25,9 @@ export function useRecordingStart(
   const [isAutoStarting, setIsAutoStarting] = useState(false);
   const { locale } = useLanguage();
   const zh = locale === "zh-CN";
-  const { clearTranscripts, setMeetingTitle } = useTranscripts();
+  const { clearTranscripts, meetingTitle, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
-  const { selectedDevices, selectedLanguage } = useConfig();
+  const { selectedDevices } = useConfig();
   const { setStatus } = useRecordingState();
 
   const generateMeetingTitle = useCallback(() => {
@@ -52,16 +50,17 @@ export function useRecordingStart(
         zh ? "正在启动录音…" : "Starting recording…",
       );
 
-      const title = generateMeetingTitle();
+      const enteredTitle = meetingTitle.trim();
+      const title = enteredTitle && enteredTitle !== '+ New Call'
+        ? enteredTitle
+        : generateMeetingTitle();
       setMeetingTitle(title);
       clearTranscripts();
-      clearLiveMeetingNotes();
 
       try {
-        const liveCaptionsEnabled = readLiveCaptionsEnabled();
-        await recordingService.setLiveCaptionEnabled(liveCaptionsEnabled);
-        // The backend validates and loads the actually configured provider.
-        // Do not initialize Parakeet here: it may not be the selected engine.
+        // The recording workspace is intentionally recording + notes only.
+        // High-quality transcription remains a separate action after saving.
+        await recordingService.setLiveCaptionEnabled(false);
         await recordingService.startRecordingWithDevices(
           selectedDevices?.micDevice || null,
           selectedDevices?.systemDevice || null,
@@ -69,22 +68,10 @@ export function useRecordingStart(
         );
         sessionStorage.setItem(
           "recording_live_transcription",
-          String(liveCaptionsEnabled),
+          "false",
         );
-        sessionStorage.setItem("recording_live_transcription_is_preview", String(liveCaptionsEnabled));
-        if (liveCaptionsEnabled) {
-          sessionStorage.setItem(
-            "recording_transcription_model",
-            JSON.stringify({
-              provider: "live-caption",
-              model: "iic/SenseVoiceSmall",
-              language: selectedLanguage,
-              startedAt: new Date().toISOString(),
-            }),
-          );
-        } else {
-          sessionStorage.removeItem("recording_transcription_model");
-        }
+        sessionStorage.setItem("recording_live_transcription_is_preview", "false");
+        sessionStorage.removeItem("recording_transcription_model");
         setIsRecording(true);
         setIsMeetingActive(true);
         Analytics.trackButtonClick("start_recording", source);
@@ -116,8 +103,8 @@ export function useRecordingStart(
       generateMeetingTitle,
       isAutoStarting,
       isRecording,
+      meetingTitle,
       selectedDevices,
-      selectedLanguage,
       setIsMeetingActive,
       setIsRecording,
       setMeetingTitle,

@@ -3,7 +3,6 @@
 import React, { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { appDataDir } from '@tauri-apps/api/path';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 
 /**
@@ -67,11 +66,18 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
         if (overlayStopInProgress.current) return;
         overlayStopInProgress.current = true;
         try {
-          const dataDir = await appDataDir();
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          await invoke('stop_recording', {
-            args: { save_path: `${dataDir}/recording-${timestamp}.wav` },
+          const result = await invoke<{
+            folder_path?: string;
+            meeting_name?: string;
+          }>('stop_recording', {
+            args: { save_path: '' },
           });
+          if (result.folder_path) {
+            sessionStorage.setItem('last_recording_folder_path', result.folder_path);
+          }
+          if (result.meeting_name) {
+            sessionStorage.setItem('last_recording_meeting_name', result.meeting_name);
+          }
           await handleRecordingStop(true);
         } catch (error) {
           console.error('[RecordingPostProcessing] Overlay stop failed:', error);

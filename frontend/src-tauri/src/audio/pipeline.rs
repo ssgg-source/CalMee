@@ -28,11 +28,10 @@ struct AudioMixerRingBuffer {
 
 impl AudioMixerRingBuffer {
     fn new(sample_rate: u32) -> Self {
-        // A 1.2 s stride keeps enough Mandarin phonetic context to avoid
-        // splitting syllables and repeating boundary tokens. Visual latency is
-        // handled by the frontend's incremental reveal rather than by feeding
-        // undersized audio chunks to the recognizer.
-        let window_ms = 1200.0;
+        // Match Paraformer's documented [0, 10, 5] online configuration:
+        // each decoder step consumes 10 * 60 ms. The model cache preserves
+        // phonetic context across these smaller, genuinely live updates.
+        let window_ms = 600.0;
         let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
 
         // CRITICAL FIX: Increase max buffer to 400ms for system audio stability
@@ -912,7 +911,7 @@ impl AudioPipeline {
                             let mixed_with_gain = mixed_clean;
 
                             // STEP 3: Feed the native online ASR at a fixed
-                            // 1.2 s cadence. Its cache spans chunks, so live
+                            // 600 ms cadence. Its cache spans chunks, so live
                             // captions no longer wait for VAD to declare the
                             // end of an entire sentence.
                             let stream_duration =
@@ -924,7 +923,8 @@ impl AudioPipeline {
                                 chunk_id: self.chunk_id_counter,
                                 device_type: DeviceType::Microphone,
                             };
-                            if let Err(error) = self.transcription_sender.send(transcription_chunk) {
+                            if let Err(error) = self.transcription_sender.send(transcription_chunk)
+                            {
                                 warn!("Failed to send streaming audio chunk: {}", error);
                             } else {
                                 self.chunk_id_counter += 1;

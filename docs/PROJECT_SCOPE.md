@@ -48,12 +48,12 @@ ready for production use.
 - Optional evidence-backed person profiles generated from confirmed local statements
 - Hotword tags, enable/disable state, frequency statistics, and import/export
 - Local calendar and standards-based CalDAV support
+- Explicit, user-authorized import from supported external note services (currently Dedao Brain)
 - English and Simplified Chinese interfaces
 
 ## First public-alpha exclusions
 
 The first public alpha does not advertise unfinished or unverified features,
-even when foundational code exists. Experimental participant profiling,
-provider-specific note imports, hosted synchronization, and managed cloud
-services stay outside the product surface until their privacy and quality
-behavior has been reviewed.
+even when foundational code exists. Hosted synchronization and enterprise-managed
+services stay outside the product surface until their privacy and quality behavior
+has been reviewed. CalMee has no separate commercial edition or entitlement gate.

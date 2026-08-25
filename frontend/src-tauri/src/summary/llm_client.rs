@@ -7,6 +7,7 @@ use tracing::info;
 
 const REQUEST_TIMEOUT_DURATION: Duration = Duration::from_secs(300);
 pub const LONG_TRANSCRIPT_TIMEOUT_DURATION: Duration = Duration::from_secs(1_800);
+const STREAM_IDLE_TIMEOUT_DURATION: Duration = Duration::from_secs(120);
 
 // Generic structure for OpenAI-compatible API chat messages
 #[derive(Debug, Serialize)]
@@ -82,13 +83,24 @@ async fn read_openai_stream(
     let mut finish_reason: Option<String> = None;
 
     loop {
+        let next_chunk = tokio::time::timeout(STREAM_IDLE_TIMEOUT_DURATION, stream.next());
         let next = if let Some(token) = cancellation_token {
             tokio::select! {
-                item = stream.next() => item,
+                item = next_chunk => item.map_err(|_| {
+                    format!(
+                        "The AI stream stopped responding for {} seconds. Check the network and retry.",
+                        STREAM_IDLE_TIMEOUT_DURATION.as_secs()
+                    )
+                })?,
                 _ = token.cancelled() => return Err("Summary generation was cancelled".into()),
             }
         } else {
-            stream.next().await
+            next_chunk.await.map_err(|_| {
+                format!(
+                    "The AI stream stopped responding for {} seconds. Check the network and retry.",
+                    STREAM_IDLE_TIMEOUT_DURATION.as_secs()
+                )
+            })?
         };
         let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|error| {

@@ -55,7 +55,7 @@ const EXCLUDED_ITEMS: &[&str] = &[
     "API keys and provider credentials",
     "license and grace-period state",
     "Dedao preferences and responses",
-    "Pro service configuration",
+    "legacy commercial service configuration",
     "calendar accounts and credentials",
     "people profiles, voiceprints, and speaker embeddings",
     "AI Harness customization and generation preferences",

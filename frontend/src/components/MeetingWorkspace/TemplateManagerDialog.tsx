@@ -14,6 +14,7 @@ const builtinZh:Record<string,{name:string;description:string}>={
   'summary-standard':{name:'标准会议纪要',description:'包含总结、议题、决策、风险与待办事项。'},
   'summary-executive':{name:'管理层简报',description:'面向管理者的精炼、决策导向简报。'},
   'summary-actions':{name:'行动事项',description:'50字以内会议摘要，以及简洁、可执行的待办事项。'},
+  'summary-speech':{name:'讲话总结',description:'按参会人整理主要观点、论证、要求、承诺与待办。'},
   'speech-complete':{name:'完整讲话记录',description:'某位参会人的完整连贯发言记录。'},
   'speech-points':{name:'观点与要点',description:'所选参会人的观点、要求与承诺。'},
   'speech-formal':{name:'正式讲话稿',description:'将某位参会人的完整发言提炼为可直接宣读或正式发布的讲话稿。'},

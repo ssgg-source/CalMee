@@ -490,10 +490,22 @@ async fn run_retranscription<R: Runtime>(
         let meeting_for_funasr = meeting_id.clone();
         let progress_callback = std::sync::Arc::new(move |progress: u32, message: &str| {
             let overall_progress = 20 + ((progress as f32 * 0.62) as u32);
+            // The sidecar progress is phase-aware: 2 means the model is being
+            // prepared, 8 means the model is ready and the audio is being
+            // analysed, and later values are recognition work. Preserve that
+            // distinction instead of making the UI infer a phase from the
+            // coarse overall percentage.
+            let stage = if progress <= 2 {
+                "loading_model"
+            } else if progress <= 8 {
+                "analyzing_audio"
+            } else {
+                "recognizing"
+            };
             emit_progress(
                 &app_for_funasr,
                 &meeting_for_funasr,
-                "transcribing",
+                stage,
                 overall_progress.min(82),
                 message,
             );

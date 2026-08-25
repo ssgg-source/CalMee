@@ -20,6 +20,7 @@ export interface RecordingStoppedPayload {
   message: string;
   folder_path?: string;
   meeting_name?: string;
+  audio_path?: string;
 }
 
 /**
@@ -83,14 +84,18 @@ export class RecordingService {
   }
 
   /**
-   * Stop recording and save to file
-   * @param savePath - Path to save audio file
-   * @returns Promise<void>
+   * Stop recording and return the canonical meeting/audio paths selected by
+   * the backend.
    */
-  async stopRecording(savePath: string): Promise<void> {
+  async stopRecording(): Promise<RecordingStoppedPayload> {
     return invoke('stop_recording', {
-      args: { save_path: savePath }
+      args: { save_path: '' }
     });
+  }
+
+  /** Stop and permanently discard only the current unsaved recording session. */
+  async discardRecording(): Promise<void> {
+    return invoke('discard_recording');
   }
 
   /**

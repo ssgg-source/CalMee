@@ -1,4 +1,4 @@
-export const CALMEE_EDITION = 'community' as const;
+export const CALMEE_EDITION = 'open-source' as const;
 
 /**
  * The public composition root exposes the capabilities available in this build.
@@ -6,8 +6,8 @@ export const CALMEE_EDITION = 'community' as const;
  * the user interface until they are ready.
  */
 export const editionCapabilities = {
-  commercialNoteConnectors: false,
-  longTermPersonProfiles: false,
+  externalNoteConnectors: true,
+  longTermPersonProfiles: true,
   managedCloudSync: false,
   enterpriseConnectors: false,
 } as const;

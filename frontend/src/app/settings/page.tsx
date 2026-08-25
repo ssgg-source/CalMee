@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
@@ -11,6 +11,7 @@ import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { CalendarSettings } from '@/components/CalendarSettings';
 import { DataMigrationSettings } from '@/components/DataMigrationSettings';
+import { DedaoSettings } from '@/components/DedaoSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -22,6 +23,7 @@ const TABS = [
   { value: 'Transcriptionmodels', labelKey: 'settings.transcription', icon: DatabaseIcon },
   { value: 'summaryModels', labelKey: 'settings.summary', icon: SparkleIcon },
   { value: 'calendar', labelKey: 'settings.calendar', icon: CalendarDays },
+  { value: 'dedao', labelKey: 'settings.dedao', icon: Brain },
   { value: 'dataMigration', labelKey: 'settings.dataMigration', icon: HardDriveDownload }
 ] as const;
 
@@ -134,6 +136,7 @@ export default function SettingsPage() {
               <SummaryModelSettings />
             </TabsContent>
             <TabsContent value="calendar"><CalendarSettings /></TabsContent>
+            <TabsContent value="dedao"><DedaoSettings /></TabsContent>
             <TabsContent value="dataMigration"><DataMigrationSettings /></TabsContent>
           </Tabs>
         </div>

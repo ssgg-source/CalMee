@@ -10,6 +10,7 @@ import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { FunAsrSettings } from './FunAsrSettings';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 export type TranscriptProvider = 'none' | 'localWhisper' | 'parakeet' | 'funasr' | 'qwen3asr' | 'deepgram' | 'groq' | 'openai' | 'qwen-cloud' | 'doubao' | 'tencent-asr' | 'baidu-asr' | 'iflytek-asr' | 'huawei-asr';
 export interface TranscriptModelProps { provider: TranscriptProvider; model: string; apiKey?: string | null }
@@ -68,13 +69,6 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
   useEffect(() => setUiProvider(transcriptModelConfig.provider), [transcriptModelConfig.provider]);
 
-  useEffect(() => {
-    // Legacy "recording only" was a recording-page concern. Recording now
-    // always works independently, while this page exclusively selects the
-    // authoritative post-recording transcription model.
-    if (uiProvider === 'none') setUiProvider('parakeet');
-  }, [uiProvider]);
-
   const loadCloudProfile = async (provider: TranscriptProvider) => {
     const defaults: Record<string, string> = provider === 'doubao' ? { resourceId: 'volc.bigasr.auc_turbo' } : {};
     setLoadingCredentials(true);
@@ -107,7 +101,8 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
       });
       onModelSelect?.();
     } catch (error) {
-      toast.error(zh ? '无法保存仅录音设置' : 'Could not save recording-only mode', { description: String(error) });
+      reportTechnicalError('save-recording-only-mode', error);
+      toast.error(zh ? '无法保存仅录音设置' : 'Could not save recording-only mode', { description: toUserFacingError(error, locale).message });
     }
   };
 
@@ -118,7 +113,10 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     try {
       await invoke('api_test_transcript_connection', { provider: uiProvider, apiKey });
       toast.success(lt('Connection successful'), { description: lt('Credentials are valid. No recording audio was uploaded.') });
-    } catch (error) { toast.error(lt('Connection failed'), { description: String(error) }); }
+    } catch (error) {
+      reportTechnicalError('test-transcription-connection', error);
+      toast.error(lt('Connection failed'), { description: toUserFacingError(error, locale).message });
+    }
     finally { setTestingConnection(false); }
   };
 
@@ -129,7 +127,10 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
       const primaryKey = credentials.apiKey || credentials.accessKeyId || credentials.secretId || '';
       await invoke('api_save_transcript_provider_credentials', { provider: uiProvider, model: cloudModel, apiKey: primaryKey || null, credentials });
       toast.success(lt('Cloud transcription credentials saved'), { description: lt('Your active local transcription model was not changed.') });
-    } catch (error) { toast.error(lt('Failed to save transcription model configuration'), { description: String(error) }); }
+    } catch (error) {
+      reportTechnicalError('save-transcription-provider', error);
+      toast.error(lt('Failed to save transcription model configuration'), { description: toUserFacingError(error, locale).message });
+    }
     finally { setSavingCloud(false); }
   };
 
@@ -150,7 +151,8 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
           <SelectTrigger className="focus:border-blue-500 focus:ring-1 focus:ring-blue-500"><SelectValue placeholder={lt('Select provider')} /></SelectTrigger>
           <SelectContent className="max-h-80">
             <SelectGroup><SelectLabel>{lt('Local models')}</SelectLabel>
-              <SelectItem value="parakeet">⚡ {lt('Parakeet (Recommended - Real-time / Accurate)')}</SelectItem>
+              <SelectItem value="none">🎙️ {zh ? '仅录音与会中笔记' : 'Recording and live notes only'}</SelectItem>
+              <SelectItem value="parakeet">⚡ {zh ? 'Parakeet（快速本地转写）' : 'Parakeet (fast local transcription)'}</SelectItem>
               <SelectItem value="localWhisper">🏠 {lt('Local Whisper (High Accuracy)')}</SelectItem>
               <SelectItem value="funasr">🎙️ {lt('FunASR (Chinese meetings / Advanced)')}</SelectItem>
               <SelectItem value="qwen3asr">🏠 {lt('Qwen3-ASR (Local)')}</SelectItem>

@@ -44,6 +44,7 @@ class LoadedDiarizer:
 
 
 _loaded: LoadedModel | None = None
+_stream_punctuator: Any = None
 _diarizer: LoadedDiarizer | None = None
 _stream_cache: dict[str, Any] = {}
 _latest_speaker_timeline: list[list[float | int]] = []
@@ -120,12 +121,13 @@ def _load_fingerprint(config: dict[str, Any]) -> str:
 
 
 def _unload_model() -> None:
-    global _loaded, _stream_cache
+    global _loaded, _stream_cache, _stream_punctuator
     if _loaded is None:
         return
     _log(f"unloading {_loaded.model_id}")
     _loaded = None
     _stream_cache = {}
+    _stream_punctuator = None
     gc.collect()
     try:
         import torch
@@ -288,7 +290,7 @@ def _download_model(config: dict[str, Any]) -> dict[str, Any]:
 
 def _stream_start(config: dict[str, Any]) -> dict[str, Any]:
     """Load FunASR's native online Paraformer and reset its session cache."""
-    global _stream_cache
+    global _stream_cache, _stream_punctuator
     online_config = dict(config)
     online_config.update({
         "model": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8404-online",
@@ -298,7 +300,44 @@ def _stream_start(config: dict[str, Any]) -> dict[str, Any]:
     })
     loaded = _load_model(online_config)
     _stream_cache = {}
+    if config.get("punc_enabled", True) and _stream_punctuator is None:
+        cache_root = os.environ.get("MODELSCOPE_CACHE", "")
+        punc_snapshot = os.path.join(
+            cache_root,
+            "models",
+            "iic--punc_ct-transformer_cn-en-common-vocab471067-large",
+            "snapshots",
+            "master",
+        )
+        if os.path.isfile(os.path.join(punc_snapshot, "config.yaml")):
+            with contextlib.redirect_stdout(sys.stderr):
+                from funasr import AutoModel
+
+                _log("loading local punctuation model for finalized live captions")
+                _stream_punctuator = AutoModel(
+                    model=punc_snapshot,
+                    device=loaded.device,
+                    ncpu=int(config.get("ncpu", 4)),
+                    disable_update=True,
+                    disable_pbar=True,
+                    log_level="ERROR",
+                )
+        else:
+            _log("local punctuation model is not installed; live captions will remain unpunctuated")
+    elif not config.get("punc_enabled", True):
+        _stream_punctuator = None
     return {"loaded": True, "model": loaded.model_id, "device": loaded.device}
+
+
+def _punctuate_stream_text(text: str) -> dict[str, Any]:
+    """Punctuate only a stable endpoint; partial captions remain append-only."""
+    cleaned = _clean_transcript_text(text)
+    if not cleaned or _stream_punctuator is None:
+        return {"text": cleaned}
+    with contextlib.redirect_stdout(sys.stderr):
+        result = _stream_punctuator.generate(input=cleaned, disable_pbar=True)
+    punctuated = str(result[0].get("text") or cleaned) if result else cleaned
+    return {"text": _clean_transcript_text(punctuated)}
 
 
 def _stream_chunk(samples: list[float], is_final: bool = False) -> dict[str, Any]:
@@ -319,7 +358,7 @@ def _stream_chunk(samples: list[float], is_final: bool = False) -> dict[str, Any
             input=speech,
             cache=_stream_cache,
             is_final=bool(is_final),
-            chunk_size=[0, 20, 10],
+            chunk_size=[0, 10, 5],
             encoder_chunk_look_back=4,
             decoder_chunk_look_back=1,
             disable_pbar=True,
@@ -1391,6 +1430,8 @@ def _handle(
             request.get("samples") or [],
             bool(request.get("is_final", False)),
         )
+    if action == "stream_punctuate":
+        return _punctuate_stream_text(str(request.get("text") or ""))
     if action == "unload":
         _unload_model()
         return {"loaded": False}

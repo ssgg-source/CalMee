@@ -18,8 +18,8 @@ static LIVE_CAPTION_ENGINE: Lazy<Mutex<Option<Arc<crate::funasr_engine::FunAsrEn
 /// CalMee treats live captions as a lightweight preview rather than the
 /// meeting's authoritative transcript. Keep this model and its minimal
 /// inference configuration separate from the full model selected in Settings.
-pub async fn prepare_live_caption_engine(
-) -> Result<Arc<crate::funasr_engine::FunAsrEngine>, String> {
+pub async fn prepare_live_caption_engine() -> Result<Arc<crate::funasr_engine::FunAsrEngine>, String>
+{
     let selected_language = crate::get_language_preference_internal()
         .filter(|value| value != "auto-translate")
         .unwrap_or_else(|| "auto".to_string());
@@ -27,7 +27,7 @@ pub async fn prepare_live_caption_engine(
     config.model = LIVE_CAPTION_MODEL.to_string();
     config.language = selected_language;
     config.vad_enabled = false;
-    config.punc_enabled = false;
+    config.punc_enabled = true;
     config.speaker_enabled = false;
     config.sentence_timestamp = false;
     config.return_raw_text = false;

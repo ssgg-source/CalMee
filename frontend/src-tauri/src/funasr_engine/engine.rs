@@ -57,7 +57,7 @@ impl FunAsrEngine {
     pub async fn load_streaming(&self) -> Result<FunAsrStatus> {
         let mut config = self.config().await;
         config.vad_enabled = false;
-        config.punc_enabled = false;
+        config.punc_enabled = true;
         config.speaker_enabled = false;
         let status = bridge::stream_start(&config).await?;
         *self.status.write().await = status.clone();
@@ -73,6 +73,10 @@ impl FunAsrEngine {
             self.load_streaming().await?;
         }
         bridge::stream_chunk(samples, is_final).await
+    }
+
+    pub async fn punctuate_streaming_endpoint(&self, text: &str) -> Result<String> {
+        Ok(bridge::stream_punctuate(text).await?.text)
     }
 
     pub async fn unload(&self) -> Result<()> {

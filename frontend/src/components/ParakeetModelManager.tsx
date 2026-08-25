@@ -113,9 +113,6 @@ export function ParakeetModelManager({
         'parakeet-model-download-complete',
         (event) => {
           const { modelName } = event.payload;
-          const displayInfo = getModelDisplayInfo(modelName);
-          const displayName = displayInfo?.friendlyName || modelName;
-
           setModels(prevModels =>
             prevModels.map(model =>
               model.name === modelName
@@ -133,11 +130,6 @@ export function ParakeetModelManager({
           // Clean up throttle data
           progressThrottleRef.current.delete(modelName);
 
-          toast.success(`${displayInfo?.icon || '✓'} ${displayName} ready!`, {
-            description: 'Model downloaded and ready to use',
-            duration: 4000
-          });
-
           // Auto-select after download using stable refs
           if (onModelSelectRef.current) {
             onModelSelectRef.current(modelName);
@@ -153,9 +145,6 @@ export function ParakeetModelManager({
         'parakeet-model-download-error',
         (event) => {
           const { modelName, error } = event.payload;
-          const displayInfo = getModelDisplayInfo(modelName);
-          const displayName = displayInfo?.friendlyName || modelName;
-
           setModels(prevModels =>
             prevModels.map(model =>
               model.name === modelName
@@ -173,14 +162,8 @@ export function ParakeetModelManager({
           // Clean up throttle data
           progressThrottleRef.current.delete(modelName);
 
-          toast.error(`Failed to download ${displayName}`, {
-            description: error,
-            duration: 6000,
-            action: {
-              label: 'Retry',
-              onClick: () => downloadModel(modelName)
-            }
-          });
+          // Global download feedback owns the failure notification. This
+          // component keeps only the inline model status and retry button.
         }
       );
     };

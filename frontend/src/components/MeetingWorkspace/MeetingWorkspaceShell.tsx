@@ -12,7 +12,7 @@ import {
   Languages,
   Link2,
   ListTree,
-  MessageSquareQuote,
+  NotebookPen,
   RefreshCw,
   Save,
   Sparkles,
@@ -47,8 +47,9 @@ import { RetranscribeDialog } from "@/components/MeetingDetails/RetranscribeDial
 import { DeepOrganizeDialog } from "@/components/MeetingDetails/DeepOrganizeDialog";
 import { TranscriptRefinementDialog } from "@/components/MeetingDetails/TranscriptRefinementDialog";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
 
-type Tab = "raw" | "smart" | "summary" | "speech";
+type Tab = "raw" | "smart" | "summary" | "notes" | "speech";
 type DocumentKind = "smart_record" | "meeting_summary" | "speech_summary";
 type MeetingDocument = {
   markdown: string;
@@ -103,12 +104,7 @@ const tabs: Array<{ id: Tab; en: string; zh: string; icon: any }> = [
   { id: "raw", en: "Raw Transcript", zh: "原始文稿", icon: FileText },
   { id: "smart", en: "Smart Record", zh: "智能记录", icon: ListTree },
   { id: "summary", en: "Meeting Summary", zh: "会议纪要", icon: WandSparkles },
-  {
-    id: "speech",
-    en: "Speech Summary",
-    zh: "讲话总结",
-    icon: MessageSquareQuote,
-  },
+  { id: "notes", en: "Meeting Notes", zh: "会中笔记", icon: NotebookPen },
 ];
 const formatClock = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
@@ -385,6 +381,27 @@ export function MeetingWorkspaceShell({
       live = false;
     };
   }, [meeting.id, kind, contextKey]);
+  useEffect(() => {
+    if (active !== "notes") return;
+    const token = ++documentLoadToken.current;
+    let live = true;
+    invoke<{ notesMarkdown?: string } | null>("api_get_meeting_notes", {
+      meetingId: meeting.id,
+    }).then((notes) => {
+      if (!live || token !== documentLoadToken.current) return;
+      setDocText(notes?.notesMarkdown || "");
+      setEditorReloadToken((value) => value + 1);
+      setDirty(false);
+    }).catch((error) => {
+      if (live) {
+        reportTechnicalError("meeting-notes-load", error);
+        toast.error(zh ? "读取会中笔记失败" : "Could not load meeting notes", {
+          description: toUserFacingError(error, locale).message,
+        });
+      }
+    });
+    return () => { live = false; };
+  }, [active, locale, meeting.id, zh]);
   useEffect(() => {
     if (active === "summary") {
       const value = summaryMarkdown(summary);
@@ -667,6 +684,18 @@ export function MeetingWorkspaceShell({
         await rawRef.current?.save();
         return true;
       }
+      if (active === "notes") {
+        const markdown = (await editorRef.current?.getMarkdown()) ?? docText;
+        await invoke("api_save_meeting_notes", {
+          meetingId: meeting.id,
+          notesMarkdown: markdown,
+          notesJson: JSON.stringify({ source: "meeting-workspace" }),
+        });
+        setDocText(markdown);
+        setDirty(false);
+        if (notify) toast.success(zh ? "会中笔记已保存" : "Meeting notes saved");
+        return true;
+      }
       if (!kind) return true;
       const markdown = (await editorRef.current?.getMarkdown()) ?? docText;
       await invoke("api_save_meeting_document", {
@@ -694,10 +723,12 @@ export function MeetingWorkspaceShell({
       if (notify) toast.success(zh ? "已保存" : "Saved");
       return true;
     } catch (error) {
-      if (notify)
+      if (notify) {
+        reportTechnicalError("meeting-document-save", error);
         toast.error(zh ? "保存失败" : "Save failed", {
-          description: String(error),
+          description: toUserFacingError(error, locale).message,
         });
+      }
       return false;
     } finally {
       setSaving(false);
@@ -994,7 +1025,7 @@ export function MeetingWorkspaceShell({
       </header>
       <main className="flex min-h-0 flex-1 flex-col p-4">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-violet-100 bg-white shadow-sm">
-          <div className="grid min-h-[68px] shrink-0 grid-cols-[auto_minmax(320px,1fr)_auto] items-center gap-4 px-5">
+          <div className="grid min-h-[68px] shrink-0 grid-cols-[180px_minmax(320px,1fr)_180px] items-center gap-4 px-5">
             <div className="justify-self-start">
               <ButtonGroup>
                 {active === "raw" ? (
@@ -1039,6 +1070,16 @@ export function MeetingWorkspaceShell({
                       disabled={transcripts.length === 0}
                     />
                   </>
+                ) : active === "notes" ? (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 border-violet-100 bg-violet-50/60 text-violet-600"
+                    title={zh ? "会中笔记" : "Meeting notes"}
+                    disabled
+                  >
+                    <NotebookPen className="h-4 w-4" />
+                  </Button>
                 ) : (
                   <>
                     <Popover>
@@ -1277,6 +1318,16 @@ export function MeetingWorkspaceShell({
                 onRefetch={onRefetchTranscripts}
                 onSeek={(seconds) => audioRef.current?.seekTo(seconds)}
                 currentTime={audioTime}
+              />
+            ) : active === "notes" ? (
+              <UnifiedMarkdownEditor
+                key={`meeting-notes:${editorReloadToken}`}
+                ref={editorRef}
+                documentKey={`${meeting.id}:meeting-notes:${editorReloadToken}`}
+                value={docText}
+                placeholder={zh ? "整理会中记录、重点、决定和待办…" : "Organize meeting notes, highlights, decisions, and actions…"}
+                onChange={setDocText}
+                onDirtyChange={setDirty}
               />
             ) : kind ? (
               <UnifiedMarkdownEditor

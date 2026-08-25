@@ -6,6 +6,7 @@
 use anyhow::Result;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -50,6 +51,14 @@ static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
 #[derive(Debug, Deserialize)]
 pub struct RecordingArgs {
     pub save_path: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct RecordingStoppedPayload {
+    pub message: String,
+    pub folder_path: Option<String>,
+    pub meeting_name: Option<String>,
+    pub audio_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -535,7 +544,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
-) -> Result<(), String> {
+) -> Result<RecordingStoppedPayload, String> {
     info!(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
@@ -543,7 +552,12 @@ pub async fn stop_recording<R: Runtime>(
     // Check if recording is active
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
-        return Ok(());
+        return Ok(RecordingStoppedPayload {
+            message: "Recording was already stopped".to_string(),
+            folder_path: None,
+            meeting_name: None,
+            audio_path: None,
+        });
     }
 
     // Emit shutdown progress to frontend
@@ -642,12 +656,7 @@ pub async fn stop_recording<R: Runtime>(
         // again with the user's full model, so stopping must never wait for a
         // large caption backlog or a model that is still loading.
         let mut task_handle = task_handle;
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(2),
-            &mut task_handle,
-        )
-        .await
-        {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(2), &mut task_handle).await {
             Ok(Ok(())) => {
                 info!("✅ ALL transcription chunks processed successfully - no data lost");
             }
@@ -802,39 +811,58 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Perform final cleanup with the manager if available
-    let (meeting_folder, meeting_name) = if let Some(mut manager) = manager_for_cleanup {
+    let (meeting_folder, meeting_name, audio_path) = if let Some(mut manager) = manager_for_cleanup
+    {
         info!("🧹 Performing final cleanup and saving recording data");
 
         // Extract meeting info BEFORE async operations
         let meeting_folder = manager.get_meeting_folder();
         let meeting_name = manager.get_meeting_name();
 
-        match tokio::time::timeout(
+        let audio_path = match tokio::time::timeout(
             tokio::time::Duration::from_secs(300), // 5 minutes max for file I/O
             manager.save_recording_only(&app),
         )
         .await
         {
-            Ok(Ok(_)) => {
+            Ok(Ok(path)) => {
                 info!("✅ Recording data saved successfully during cleanup");
+                path
             }
             Ok(Err(e)) => {
-                warn!(
-                    "⚠️ Error during recording cleanup (transcripts preserved): {}",
+                let message = format!(
+                    "Audio could not be saved. The meeting transcript remains available: {}",
                     e
                 );
-                // Don't fail shutdown - transcripts are already preserved
+                error!("{}", message);
+                IS_RECORDING.store(false, Ordering::SeqCst);
+                let _ = app.emit("recording-save-failed", serde_json::json!({
+                    "message": message,
+                    "folder_path": meeting_folder.as_ref().map(|path| path.to_string_lossy().to_string())
+                }));
+                crate::tray::update_tray_menu(&app);
+                return Err(message);
             }
             Err(_) => {
-                warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
-                // Don't fail shutdown - transcripts are already preserved
+                let message = "Audio finalization timed out. The meeting transcript remains available and the recording was not marked as saved.".to_string();
+                error!("{}", message);
+                IS_RECORDING.store(false, Ordering::SeqCst);
+                let _ = app.emit("recording-save-failed", serde_json::json!({
+                    "message": message,
+                    "folder_path": meeting_folder.as_ref().map(|path| path.to_string_lossy().to_string())
+                }));
+                crate::tray::update_tray_menu(&app);
+                return Err(message);
             }
-        }
+        };
 
-        (meeting_folder, meeting_name)
+        (meeting_folder, meeting_name, audio_path)
     } else {
-        info!("ℹ️ No recording manager available for cleanup");
-        (None, None)
+        let message = "Recording stopped, but its save session was unavailable.".to_string();
+        error!("{}", message);
+        IS_RECORDING.store(false, Ordering::SeqCst);
+        crate::tray::update_tray_menu(&app);
+        return Err(message);
     };
 
     // Set recording flag to false
@@ -867,21 +895,82 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Emit final stop event with folder_path and meeting_name for frontend to save
-    app.emit(
-        "recording-stopped",
-        serde_json::json!({
-            "message": "Recording stopped - frontend will save after all transcripts received",
-            "folder_path": folder_path_str,
-            "meeting_name": meeting_name_str
-        }),
-    )
-    .map_err(|e| e.to_string())?;
+    let payload = RecordingStoppedPayload {
+        message: "Recording stopped - frontend will save after all transcripts received"
+            .to_string(),
+        folder_path: folder_path_str,
+        meeting_name: meeting_name_str,
+        audio_path,
+    };
+    app.emit("recording-stopped", &payload)
+        .map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect stopped state
     crate::tray::update_tray_menu(&app);
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
-    Ok(())
+    Ok(payload)
+}
+
+fn resolve_discard_folder(base: &Path, folder: &Path) -> Result<PathBuf, String> {
+    let base = base
+        .canonicalize()
+        .map_err(|error| format!("Could not verify the recordings folder: {error}"))?;
+    let folder = folder
+        .canonicalize()
+        .map_err(|error| format!("Could not verify the current recording folder: {error}"))?;
+
+    if folder.parent() != Some(base.as_path()) {
+        return Err("Refusing to delete a path outside the current recordings folder".to_string());
+    }
+    if !folder.is_dir() {
+        return Err("The current recording path is not a folder".to_string());
+    }
+    Ok(folder)
+}
+
+/// Delete only the canonical direct-child folder created for the recording
+/// that has just been stopped. Historical meetings and arbitrary paths are
+/// intentionally outside this command's scope.
+pub fn discard_saved_recording_folder(folder_path: &str) -> Result<(), String> {
+    let base = super::recording_preferences::get_default_recordings_folder();
+    let folder = resolve_discard_folder(&base, Path::new(folder_path))?;
+    std::fs::remove_dir_all(folder)
+        .map_err(|error| format!("Could not delete the current recording: {error}"))
+}
+
+#[cfg(test)]
+mod discard_tests {
+    use super::resolve_discard_folder;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn discard_scope_accepts_only_a_direct_child_folder() {
+        let root = TempDir::new().expect("temp directory");
+        let base = root.path().join("recordings");
+        let session = base.join("current-session");
+        fs::create_dir_all(&session).expect("session folder");
+
+        assert_eq!(
+            resolve_discard_folder(&base, &session).expect("direct child"),
+            session.canonicalize().expect("canonical session")
+        );
+    }
+
+    #[test]
+    fn discard_scope_rejects_base_nested_and_outside_folders() {
+        let root = TempDir::new().expect("temp directory");
+        let base = root.path().join("recordings");
+        let nested = base.join("current-session").join("audio");
+        let outside = root.path().join("other");
+        fs::create_dir_all(&nested).expect("nested folder");
+        fs::create_dir_all(&outside).expect("outside folder");
+
+        assert!(resolve_discard_folder(&base, &base).is_err());
+        assert!(resolve_discard_folder(&base, &nested).is_err());
+        assert!(resolve_discard_folder(&base, &outside).is_err());
+    }
 }
 
 /// Check if recording is active

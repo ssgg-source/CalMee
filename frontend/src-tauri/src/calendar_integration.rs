@@ -19,6 +19,14 @@ pub struct CalendarSettings {
     pub caldav_password: Option<String>,
     pub caldav_calendar_path: Option<String>,
     pub sync_mode: String,
+    pub dedao_enabled: bool,
+    pub dedao_api_key: Option<String>,
+    pub dedao_client_id: Option<String>,
+    pub dedao_recording_only: bool,
+    pub dedao_content_mode: String,
+    pub dedao_conflict_mode: String,
+    pub dedao_authorized_at: Option<String>,
+    pub dedao_last_sync_at: Option<String>,
     pub last_sync_at: Option<String>,
 }
 
@@ -72,6 +80,36 @@ pub struct CalendarEventInput {
 pub struct ExternalMeetingImportResult {
     pub meeting_id: String,
     pub transcript_blocks: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoNotePreview {
+    pub note_id: String,
+    pub title: String,
+    pub content_preview: String,
+    pub note_type: String,
+    pub tags: Vec<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub imported: bool,
+    pub has_audio: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoNotesPage {
+    pub notes: Vec<DedaoNotePreview>,
+    pub cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,7 +313,7 @@ async fn upsert_native_calendar(
 }
 
 async fn read_settings(pool: &SqlitePool) -> Result<CalendarSettings, String> {
-    sqlx::query_as::<_, CalendarSettings>("SELECT local_enabled,caldav_enabled,caldav_url,caldav_username,caldav_password,caldav_calendar_path,sync_mode,last_sync_at FROM calendar_settings WHERE id='default'")
+    sqlx::query_as::<_, CalendarSettings>("SELECT local_enabled,caldav_enabled,caldav_url,caldav_username,caldav_password,caldav_calendar_path,sync_mode,dedao_enabled,dedao_api_key,dedao_client_id,dedao_recording_only,dedao_content_mode,dedao_conflict_mode,dedao_authorized_at,dedao_last_sync_at,last_sync_at FROM calendar_settings WHERE id='default'")
         .fetch_one(pool).await.map_err(|e| e.to_string())
 }
 
@@ -291,12 +329,25 @@ pub async fn api_get_calendar_settings<R: Runtime>(
 pub async fn api_save_calendar_settings<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    settings: CalendarSettings,
+    mut settings: CalendarSettings,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE calendar_settings SET local_enabled=?,caldav_enabled=?,caldav_url=?,caldav_username=?,caldav_password=?,caldav_calendar_path=?,sync_mode=?,updated_at=? WHERE id='default'")
+    let reversed = settings
+        .dedao_client_id
+        .as_deref()
+        .is_some_and(|value| value.trim().starts_with("gk_"))
+        && settings
+            .dedao_api_key
+            .as_deref()
+            .is_some_and(|value| value.trim().starts_with("cli_"));
+    if reversed {
+        std::mem::swap(&mut settings.dedao_client_id, &mut settings.dedao_api_key);
+    }
+    sqlx::query("UPDATE calendar_settings SET local_enabled=?,caldav_enabled=?,caldav_url=?,caldav_username=?,caldav_password=?,caldav_calendar_path=?,sync_mode=?,dedao_enabled=?,dedao_api_key=?,dedao_client_id=?,dedao_recording_only=?,dedao_content_mode=?,dedao_conflict_mode=?,updated_at=? WHERE id='default'")
         .bind(settings.local_enabled).bind(settings.caldav_enabled).bind(settings.caldav_url)
         .bind(settings.caldav_username).bind(settings.caldav_password).bind(settings.caldav_calendar_path)
-        .bind(settings.sync_mode).bind(Utc::now().to_rfc3339())
+        .bind(settings.sync_mode).bind(settings.dedao_enabled).bind(settings.dedao_api_key)
+        .bind(settings.dedao_client_id).bind(settings.dedao_recording_only)
+        .bind(settings.dedao_content_mode).bind(settings.dedao_conflict_mode).bind(Utc::now().to_rfc3339())
         .execute(state.db_manager.pool()).await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -712,6 +763,325 @@ async fn insert_external_meeting_record(
         },
         false,
     ))
+}
+
+const DEDAO_API_BASE: &str = "https://openapi.biji.com/open/api/v1/resource/note";
+
+fn dedao_credentials(settings: &CalendarSettings) -> Result<(String, String), String> {
+    let client_id = settings
+        .dedao_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("Enter the Dedao Brain Client ID first")?;
+    let api_key = settings
+        .dedao_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("Enter the Dedao Brain API Key first")?;
+    if !client_id.starts_with("cli_") || !api_key.starts_with("gk_live_") {
+        return Err(
+            "Invalid Dedao Brain credentials. Check the Client ID and API Key fields.".into(),
+        );
+    }
+    Ok((client_id.to_owned(), api_key.to_owned()))
+}
+
+fn dedao_value_string(value: Option<&serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn dedao_timestamp(value: Option<&serde_json::Value>) -> Option<String> {
+    fn unix_millis(number: i64) -> i64 {
+        if number > 100_000_000_000_000_000 {
+            number / 1_000_000
+        } else if number > 100_000_000_000_000 {
+            number / 1_000
+        } else if number > 10_000_000_000 {
+            number
+        } else {
+            number * 1_000
+        }
+    }
+    let value = value?;
+    if let Some(text) = value.as_str() {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+            return Some(parsed.with_timezone(&Utc).to_rfc3339());
+        }
+        for format in ["%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%z"] {
+            if let Ok(parsed) = DateTime::parse_from_str(text, format) {
+                return Some(parsed.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+        for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+            if let Ok(parsed) = NaiveDateTime::parse_from_str(text, format) {
+                return Local
+                    .from_local_datetime(&parsed)
+                    .single()
+                    .map(|date| date.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+        return text
+            .parse::<i64>()
+            .ok()
+            .and_then(|number| Utc.timestamp_millis_opt(unix_millis(number)).single())
+            .map(|date| date.to_rfc3339());
+    }
+    value
+        .as_i64()
+        .and_then(|number| Utc.timestamp_millis_opt(unix_millis(number)).single())
+        .map(|date| date.to_rfc3339())
+}
+
+fn dedao_note_timestamp(note: &serde_json::Value) -> Option<String> {
+    [
+        "meeting_start_time",
+        "recorded_at",
+        "record_time",
+        "created_at",
+        "create_time",
+    ]
+    .iter()
+    .find_map(|key| dedao_timestamp(note.get(key)))
+    .or_else(|| dedao_timestamp(note.pointer("/audio/created_at")))
+    .or_else(|| dedao_timestamp(note.pointer("/audio/start_time")))
+}
+
+fn dedao_tags(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_owned).or_else(|| {
+                        ["name", "title", "tag_name"].iter().find_map(|key| {
+                            item.get(key)
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                        })
+                    })
+                })
+                .filter(|value| !value.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn dedao_get(
+    settings: &CalendarSettings,
+    path: &str,
+    query: &[(&str, String)],
+) -> Result<serde_json::Value, String> {
+    let (client_id, api_key) = dedao_credentials(settings)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| "Could not initialize the Dedao Brain connection".to_string())?;
+    for attempt in 0..3_u32 {
+        let response = client
+            .get(format!("{}/{}", DEDAO_API_BASE, path))
+            .header("Authorization", &api_key)
+            .header("X-Client-ID", &client_id)
+            .query(query)
+            .send()
+            .await
+            .map_err(|_| {
+                "Could not connect to Dedao Brain. Check the network and try again.".to_string()
+            })?;
+        let status = response.status();
+        let retryable = matches!(status.as_u16(), 429 | 502 | 503 | 504);
+        if retryable && attempt < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(600 * 2_u64.pow(attempt))).await;
+            continue;
+        }
+        let json = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|_| "Dedao Brain returned an unsupported response".to_string())?;
+        let code = json
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if code != 0 || !status.is_success() {
+            return Err(match status.as_u16() {
+                401 => "Dedao Brain authentication failed. Check the credentials and permissions."
+                    .into(),
+                403 => {
+                    "Dedao Brain denied access. Check membership and note read permission.".into()
+                }
+                429 => "Dedao Brain rate limit reached. Try again later.".into(),
+                _ => format!("Dedao Brain request failed (code {}).", code),
+            });
+        }
+        return Ok(json);
+    }
+    Err("Dedao Brain request failed after three attempts".into())
+}
+
+#[tauri::command]
+pub async fn api_list_dedao_notes<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    cursor: Option<String>,
+) -> Result<DedaoNotesPage, String> {
+    let settings = read_settings(state.db_manager.pool()).await?;
+    let query = cursor
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![("cursor", value)])
+        .unwrap_or_default();
+    let json = dedao_get(&settings, "list", &query).await?;
+    let data = json
+        .get("data")
+        .ok_or("Dedao Brain response is missing data")?;
+    let values = data
+        .get("notes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Dedao Brain response is missing the notes list")?;
+    let mut notes = Vec::with_capacity(values.len());
+    for value in values {
+        let note_id = dedao_value_string(value.get("note_id").or_else(|| value.get("id")))
+            .ok_or("Dedao Brain note is missing an ID")?;
+        let imported = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM meetings WHERE source='dedao' AND external_id=?",
+        )
+        .bind(&note_id)
+        .fetch_one(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?
+            > 0;
+        let note_type = value
+            .get("note_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let tags = dedao_tags(value.get("tags"));
+        let preview = value
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(180)
+            .collect();
+        let has_audio = value.get("audio").is_some_and(|audio| !audio.is_null())
+            || ["audio", "voice", "recording"]
+                .iter()
+                .any(|kind| note_type.to_ascii_lowercase().contains(kind))
+            || tags
+                .iter()
+                .any(|tag| tag.contains("录音") || tag.contains("语音") || tag.contains("会议"));
+        notes.push(DedaoNotePreview {
+            note_id,
+            title: value
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("Untitled note")
+                .to_owned(),
+            content_preview: preview,
+            note_type,
+            tags,
+            created_at: dedao_note_timestamp(value),
+            updated_at: dedao_timestamp(value.get("updated_at")),
+            imported,
+            has_audio,
+        });
+    }
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE calendar_settings SET dedao_authorized_at=?,updated_at=? WHERE id='default'",
+    )
+    .bind(&now)
+    .bind(&now)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(DedaoNotesPage {
+        notes,
+        cursor: dedao_value_string(data.get("cursor")),
+        has_more: data
+            .get("has_more")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub async fn api_import_dedao_notes<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    note_ids: Vec<String>,
+    overwrite_existing: Option<bool>,
+) -> Result<DedaoImportResult, String> {
+    if note_ids.is_empty() {
+        return Err("Select notes to import first".into());
+    }
+    let settings = read_settings(state.db_manager.pool()).await?;
+    let mut result = DedaoImportResult {
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    };
+    for note_id in note_ids {
+        let outcome = async {
+            let json = dedao_get(&settings, "detail", &[("id", note_id.clone())]).await?;
+            let note = json
+                .pointer("/data/note")
+                .ok_or("Note detail response is missing note")?;
+            let title = note
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("Untitled note");
+            let cleaned = note
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let raw = note
+                .pointer("/audio/original")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let raw_content = raw
+                .or(cleaned)
+                .ok_or("This note has no importable content")?;
+            let start = dedao_note_timestamp(note).unwrap_or_else(|| Utc::now().to_rfc3339());
+            insert_external_meeting_record(
+                state.db_manager.pool(),
+                title,
+                raw_content,
+                cleaned.or(raw),
+                &start,
+                "dedao",
+                Some(&note_id),
+                overwrite_existing.unwrap_or(false) || settings.dedao_conflict_mode == "overwrite",
+            )
+            .await
+        }
+        .await;
+        match outcome {
+            Ok((_, true)) => result.skipped += 1,
+            Ok((_, false)) => result.imported += 1,
+            Err(error) => {
+                result.failed += 1;
+                log::warn!("Dedao note import failed: {}", error);
+            }
+        }
+    }
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE calendar_settings SET dedao_last_sync_at=?,updated_at=? WHERE id='default'",
+    )
+    .bind(&now)
+    .bind(&now)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1864,5 +2234,46 @@ mod external_transcript_tests {
         assert_eq!(blocks[0].speaker.as_deref(), Some("鲁立"));
         assert_eq!(blocks[0].text, "第一段发言。");
         assert_eq!(blocks[1].text, "第二段发言。");
+    }
+
+    #[test]
+    fn dedao_credentials_require_expected_public_api_prefixes() {
+        let mut settings = CalendarSettings {
+            local_enabled: true,
+            caldav_enabled: false,
+            caldav_url: None,
+            caldav_username: None,
+            caldav_password: None,
+            caldav_calendar_path: None,
+            sync_mode: "manual".into(),
+            dedao_enabled: true,
+            dedao_api_key: Some("gk_live_test".into()),
+            dedao_client_id: Some("cli_test".into()),
+            dedao_recording_only: true,
+            dedao_content_mode: "note".into(),
+            dedao_conflict_mode: "skip".into(),
+            dedao_authorized_at: None,
+            dedao_last_sync_at: None,
+            last_sync_at: None,
+        };
+        assert!(dedao_credentials(&settings).is_ok());
+        settings.dedao_api_key = Some("cli_bad".into());
+        assert!(dedao_credentials(&settings).is_err());
+    }
+
+    #[test]
+    fn dedao_timestamps_accept_seconds_milliseconds_and_rfc3339() {
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!(1_700_000_000))),
+            Some("2023-11-14T22:13:20+00:00".into())
+        );
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!(1_700_000_000_000_i64))),
+            Some("2023-11-14T22:13:20+00:00".into())
+        );
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!("2026-08-25T10:00:00+08:00"))),
+            Some("2026-08-25T02:00:00+00:00".into())
+        );
     }
 }
