@@ -48,6 +48,7 @@
 - [ ] Enable issues and discussions on the public `calmee` repository
 - [ ] Add a description, topics, screenshots, and an alpha warning
 - [ ] Protect `main` and require CI checks
+- [ ] Never edit an applied SQL migration; add a new migration and update the checksum manifest instead
 - [ ] Publish source first; publish binaries only after signing and notarization
 - [ ] Tag the first release as `v0.1.0-alpha.1` or another clear pre-release
 - [ ] Document supported systems, model sizes, disk locations, and known limitations

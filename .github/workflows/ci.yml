@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: 24
       - run: node scripts/check-release-boundaries.mjs
+      - run: node scripts/check-migration-integrity.mjs
       - run: node --check scripts/lock-funasr-runtime.mjs
       - run: python3 -m py_compile scripts/generate-python-runtime-notices.py
 
