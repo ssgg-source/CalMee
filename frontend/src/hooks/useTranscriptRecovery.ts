@@ -7,7 +7,12 @@
 
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { indexedDBService, MeetingMetadata, StoredTranscript } from '@/services/indexedDBService';
+import {
+  getStoredTranscriptSequenceId,
+  indexedDBService,
+  MeetingMetadata,
+  StoredTranscript,
+} from '@/services/indexedDBService';
 import { storageService } from '@/services/storageService';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
@@ -56,31 +61,54 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       });
 
       // Verify audio checkpoint availability for each meeting
-      const meetingsWithAudioStatus = await Promise.all(
+      const checkedMeetings = await Promise.all(
         recentMeetings.map(async (meeting) => {
+          const transcriptCount = (await indexedDBService.getTranscripts(meeting.meetingId)).length;
           if (meeting.folderPath) {
             try {
               const hasAudio = await invoke<boolean>('has_audio_checkpoints', {
                 meetingFolder: meeting.folderPath
               });
 
-              // If no audio files, clear folderPath to show "No audio" in UI
               return {
-                ...meeting,
-                folderPath: hasAudio ? meeting.folderPath : undefined
+                meeting: {
+                  ...meeting,
+                  transcriptCount,
+                  folderPath: hasAudio ? meeting.folderPath : undefined
+                },
+                recoverable: hasAudio || transcriptCount > 0,
+                checkSucceeded: true,
               };
             } catch (error) {
               console.warn('Failed to check audio for meeting:', error);
-              // On error, assume no audio to be safe
-              return { ...meeting, folderPath: undefined };
+              // A transient backend error must never cause recovery metadata to
+              // be deleted. Keep it visible so the user can retry later.
+              return {
+                meeting: { ...meeting, transcriptCount },
+                recoverable: true,
+                checkSucceeded: false,
+              };
             }
           }
-          return meeting;
+          return {
+            meeting: { ...meeting, transcriptCount },
+            recoverable: transcriptCount > 0,
+            checkSucceeded: true,
+          };
         })
       );
 
+      // Empty IndexedDB placeholders contain neither transcript text nor a
+      // valid audio checkpoint. They cannot be recovered and otherwise cause
+      // the recovery dialog to appear on every visit. Remove only that cache
+      // metadata; recording folders are never deleted here.
+      await Promise.all(checkedMeetings
+        .filter(item => item.checkSucceeded && !item.recoverable)
+        .map(item => indexedDBService.deleteMeeting(item.meeting.meetingId)));
 
-      setRecoverableMeetings(meetingsWithAudioStatus);
+      setRecoverableMeetings(checkedMeetings
+        .filter(item => item.recoverable)
+        .map(item => item.meeting));
     } catch (error) {
       console.error('Failed to check for recoverable transcripts:', error);
       setRecoverableMeetings([]);
@@ -95,8 +123,7 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
   const loadMeetingTranscripts = useCallback(async (meetingId: string): Promise<StoredTranscript[]> => {
     try {
       const transcripts = await indexedDBService.getTranscripts(meetingId);
-      // Sort by sequence ID
-      transcripts.sort((a, b) => (a.sequenceId || 0) - (b.sequenceId || 0));
+      // IndexedDB service compacts legacy live revisions by sequence id.
       return transcripts;
     } catch (error) {
       console.error('Failed to load meeting transcripts:', error);
@@ -168,7 +195,7 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
         id: t.id?.toString() || `${Date.now()}-${index}`,
         text: t.text,
         timestamp: t.timestamp,
-        sequence_id: t.sequenceId || index,
+        sequence_id: getStoredTranscriptSequenceId(t, index),
         chunk_start_time: (t as any).chunk_start_time,
         is_partial: (t as any).is_partial || false,
         confidence: t.confidence,

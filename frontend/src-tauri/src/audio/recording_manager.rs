@@ -308,7 +308,7 @@ impl RecordingManager {
     pub async fn save_recording_only<R: tauri::Runtime>(
         &mut self,
         app: &tauri::AppHandle<R>,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
@@ -316,25 +316,27 @@ impl RecordingManager {
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
-        match self
+        let saved_path = match self
             .recording_saver
             .stop_and_save(app, recording_duration)
             .await
         {
             Ok(Some(file_path)) => {
                 info!("Recording saved successfully to: {}", file_path);
+                Some(file_path)
             }
             Ok(None) => {
                 debug!("Recording not saved (auto-save disabled or no audio data)");
+                None
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
-        }
+        };
 
         debug!("Recording save operation completed");
-        Ok(())
+        Ok(saved_path)
     }
 
     /// Stop recording and save audio (legacy method)

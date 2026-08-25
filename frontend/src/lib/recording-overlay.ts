@@ -15,26 +15,35 @@ export async function showRecordingOverlay() {
   const screenWidth = monitor ? monitor.size.width / scale : 1440;
   const screenX = monitor ? monitor.position.x / scale : 0;
   const width = 420;
-  const overlay = new WebviewWindow(LABEL, {
-    url: "/recording-overlay",
-    title: "CalMee Recording",
-    width,
-    height: 64,
-    x: Math.round(screenX + (screenWidth - width) / 2),
-    y: 42,
-    resizable: false,
-    decorations: false,
-    transparent: true,
-    shadow: false,
-    alwaysOnTop: true,
-    visibleOnAllWorkspaces: true,
-    skipTaskbar: true,
-    focus: false,
+  return await new Promise<WebviewWindow>((resolve, reject) => {
+    const overlay = new WebviewWindow(LABEL, {
+      url: "/recording-overlay",
+      title: "CalMee Recording",
+      width,
+      height: 64,
+      x: Math.round(screenX + (screenWidth - width) / 2),
+      y: 42,
+      resizable: true,
+      decorations: false,
+      transparent: true,
+      shadow: false,
+      alwaysOnTop: true,
+      visibleOnAllWorkspaces: true,
+      skipTaskbar: true,
+      focus: false,
+    });
+    overlay.once("tauri://created", async () => {
+      try {
+        await overlay.show();
+        resolve(overlay);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    overlay.once("tauri://error", event => {
+      reject(new Error(String(event.payload || "Could not create recording overlay")));
+    });
   });
-  overlay.once("tauri://created", () => {
-    void overlay.show();
-  });
-  return overlay;
 }
 
 export async function hideRecordingOverlay() {

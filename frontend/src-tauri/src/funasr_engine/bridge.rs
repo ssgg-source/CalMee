@@ -1,6 +1,6 @@
 use super::{
-    DiarizationInputSegment, DiarizationResult, FunAsrConfig, FunAsrResult, FunAsrRuntimeStatus,
-    FunAsrStatus, FunAsrStreamingResult, SpeakerReclusterStatus,
+    DiarizationInputSegment, DiarizationResult, FunAsrConfig, FunAsrPunctuationResult,
+    FunAsrResult, FunAsrRuntimeStatus, FunAsrStatus, FunAsrStreamingResult, SpeakerReclusterStatus,
 };
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
@@ -279,6 +279,10 @@ pub async fn stream_chunk(samples: &[f32], is_final: bool) -> Result<FunAsrStrea
         None,
     )
     .await
+}
+
+pub async fn stream_punctuate(text: &str) -> Result<FunAsrPunctuationResult> {
+    with_sidecar(json!({"action": "stream_punctuate", "text": text}), None).await
 }
 
 pub async fn status() -> Result<FunAsrStatus> {

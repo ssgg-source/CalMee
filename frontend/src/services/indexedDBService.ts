@@ -21,7 +21,7 @@ export interface StoredTranscript {
   text: string;               // Transcript text
   timestamp: string;          // ISO 8601 timestamp
   confidence: number;         // Whisper confidence score
-  sequenceId: number;         // Sequence number for ordering
+  sequenceId?: number;        // Sequence number for ordering (legacy rows used sequence_id)
   storedAt: number;           // Unix timestamp when saved
   audio_start_time?: number;  // Recording-relative start time in seconds
   audio_end_time?: number;    // Recording-relative end time in seconds
@@ -29,10 +29,39 @@ export interface StoredTranscript {
   [key: string]: any;         // Allow additional fields from TranscriptUpdate
 }
 
+export function getStoredTranscriptSequenceId(
+  transcript: Pick<StoredTranscript, 'sequenceId'> & { sequence_id?: number },
+  fallback = 0
+): number {
+  const value = transcript.sequenceId ?? transcript.sequence_id;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Old recovery rows stored every live revision as a new record and used the
+ * Rust-style sequence_id field. Keep only the newest revision per sequence.
+ */
+export function compactStoredTranscripts(transcripts: StoredTranscript[]): StoredTranscript[] {
+  const latestBySequence = new Map<number, StoredTranscript>();
+
+  transcripts.forEach((transcript, index) => {
+    const sequenceId = getStoredTranscriptSequenceId(transcript, index);
+    const normalized = { ...transcript, sequenceId };
+    const existing = latestBySequence.get(sequenceId);
+    if (!existing || normalized.storedAt >= existing.storedAt) {
+      latestBySequence.set(sequenceId, normalized);
+    }
+  });
+
+  return Array.from(latestBySequence.values()).sort(
+    (left, right) => getStoredTranscriptSequenceId(left) - getStoredTranscriptSequenceId(right)
+  );
+}
+
 class IndexedDBService {
   private db: IDBDatabase | null = null;
   private readonly DB_NAME = 'CalMeeRecoveryDB';
-  private readonly DB_VERSION = 1;
+  private readonly DB_VERSION = 2;
   private initPromise: Promise<void> | null = null;
 
   /**
@@ -74,13 +103,23 @@ class IndexedDBService {
           }
 
           // Create transcripts store
+          let transcriptsStore: IDBObjectStore;
           if (!db.objectStoreNames.contains('transcripts')) {
-            const transcriptsStore = db.createObjectStore('transcripts', {
+            transcriptsStore = db.createObjectStore('transcripts', {
               keyPath: 'id',
               autoIncrement: true
             });
             transcriptsStore.createIndex('meetingId', 'meetingId', { unique: false });
             transcriptsStore.createIndex('storedAt', 'storedAt', { unique: false });
+          } else {
+            transcriptsStore = request.transaction!.objectStore('transcripts');
+          }
+          if (!transcriptsStore.indexNames.contains('meetingSequence')) {
+            transcriptsStore.createIndex(
+              'meetingSequence',
+              ['meetingId', 'sequenceId'],
+              { unique: false }
+            );
           }
         };
       } catch (error) {
@@ -231,9 +270,11 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
+      const sequenceId = getStoredTranscriptSequenceId(transcript);
       const storedTranscript: StoredTranscript = {
         ...transcript,
         meetingId,
+        sequenceId,
         storedAt: Date.now()
       };
 
@@ -241,12 +282,28 @@ class IndexedDBService {
       const transcriptsStore = transaction.objectStore('transcripts');
       const meetingsStore = transaction.objectStore('meetings');
 
-      // Save transcript
+      // A live sentence is revised many times under the same sequence id.
+      // Replace that recovery row instead of accumulating every 600 ms draft.
+      const sequenceIndex = transcriptsStore.index('meetingSequence');
+      const existingRevisions = await new Promise<StoredTranscript[]>((resolve, reject) => {
+        const request = sequenceIndex.getAll([meetingId, sequenceId]);
+        request.onsuccess = () => resolve(request.result as StoredTranscript[]);
+        request.onerror = () => reject(request.error);
+      });
+      if (existingRevisions[0]?.id !== undefined) {
+        storedTranscript.id = existingRevisions[0].id;
+      }
+
       await new Promise<void>((resolve, reject) => {
-        const request = transcriptsStore.add(storedTranscript);
+        const request = transcriptsStore.put(storedTranscript);
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error);
       });
+      for (const duplicate of existingRevisions.slice(1)) {
+        if (duplicate.id !== undefined) {
+          transcriptsStore.delete(duplicate.id);
+        }
+      }
 
       // Update meeting metadata
       const meeting = await new Promise<MeetingMetadata | null>((resolve, reject) => {
@@ -257,7 +314,9 @@ class IndexedDBService {
 
       if (meeting) {
         meeting.lastUpdated = Date.now();
-        meeting.transcriptCount += 1;
+        if (existingRevisions.length === 0) {
+          meeting.transcriptCount += 1;
+        }
         await new Promise<void>((resolve, reject) => {
           const request = meetingsStore.put(meeting);
           request.onsuccess = () => resolve();
@@ -284,10 +343,7 @@ class IndexedDBService {
       return new Promise((resolve, reject) => {
         const request = index.getAll(meetingId);
         request.onsuccess = () => {
-          const transcripts = request.result as StoredTranscript[];
-          // Sort by sequence ID
-          transcripts.sort((a, b) => a.sequenceId - b.sequenceId);
-          resolve(transcripts);
+          resolve(compactStoredTranscripts(request.result as StoredTranscript[]));
         };
         request.onerror = () => reject(request.error);
       });
@@ -302,17 +358,7 @@ class IndexedDBService {
    */
   async getTranscriptCount(meetingId: string): Promise<number> {
     try {
-      if (!this.db) await this.init();
-
-      const transaction = this.db!.transaction(['transcripts'], 'readonly');
-      const store = transaction.objectStore('transcripts');
-      const index = store.index('meetingId');
-
-      return new Promise((resolve, reject) => {
-        const request = index.count(meetingId);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+      return (await this.getTranscripts(meetingId)).length;
     } catch (error) {
       console.error('Failed to get transcript count from IndexedDB:', error);
       return 0;

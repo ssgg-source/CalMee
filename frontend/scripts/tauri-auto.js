@@ -128,6 +128,12 @@ if (command === 'dev' && platform === 'darwin') {
   }
 
   const webkitNetworkCaches = [
+    // Community/open-source identifier. Keep this first: the database and all
+    // persistent app data already use this identifier, so its WKWebView cache
+    // is also the one used by the current CalMee development shell.
+    path.join(os.homedir(), 'Library', 'Caches', 'io.github.ssgg-source.calmee', 'WebKit', 'NetworkCache'),
+    // Historical identifiers are retained only so developers switching from
+    // an older build do not inherit an incompatible development chunk graph.
     path.join(os.homedir(), 'Library', 'Caches', 'calmee', 'WebKit', 'NetworkCache'),
     path.join(os.homedir(), 'Library', 'Caches', 'com.calmee.app', 'WebKit', 'NetworkCache'),
   ];

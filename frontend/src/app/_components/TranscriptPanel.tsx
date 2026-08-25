@@ -149,7 +149,10 @@ export function TranscriptPanel({
               isPaused={isPaused}
               isProcessing={isProcessingStop}
               isStopping={isStopping}
-              enableStreaming={isRecording}
+              // FunASR already delivers frequent incremental revisions. A
+              // second character-by-character animation can repeatedly hide
+              // and reveal the same sentence when the decoder corrects text.
+              enableStreaming={false}
               showConfidence={true}
             />
             )}

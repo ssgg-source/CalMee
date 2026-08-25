@@ -3,29 +3,32 @@ import { Lock, Sparkles, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export function WelcomeStep() {
   const { goNext } = useOnboarding();
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
 
   const features = [
     {
       icon: Lock,
-      title: 'Your data never leaves your device',
+      title: zh ? '录音、笔记和本地模型由你掌控' : 'You control recordings, notes, and local models',
     },
     {
       icon: Sparkles,
-      title: 'Intelligent summaries & insights',
+      title: zh ? '从录音、转写到 AI 会议纪要' : 'From recordings and transcripts to AI meeting notes',
     },
     {
       icon: Cpu,
-      title: 'Works offline, no cloud required',
+      title: zh ? '兼容本地模型与多种云端服务' : 'Works with local models and multiple cloud providers',
     },
   ];
 
   return (
     <OnboardingContainer
-      title="Welcome to CalMee"
-      description="Record. Transcribe. Summarize. All on your device."
+      title={zh ? '欢迎使用 CalMee' : 'Welcome to CalMee'}
+      description={zh ? '录音、会中笔记、转写与 AI 会议纪要，组成完整的会议工作流。' : 'A complete meeting workflow for recording, live notes, transcription, and AI meeting notes.'}
       step={1}
       hideProgress={true}
     >
@@ -56,9 +59,9 @@ export function WelcomeStep() {
             onClick={goNext}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
-            Get Started
+            {zh ? '开始设置' : 'Get started'}
           </Button>
-          <p className="text-xs text-center text-gray-500">Takes less than 3 minutes</p>
+          <p className="text-xs text-center text-gray-500">{zh ? '无需预先下载模型' : 'No model download required'}</p>
         </div>
       </div>
     </OnboardingContainer>

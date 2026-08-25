@@ -17,6 +17,137 @@ static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 // Speech detection flag - reset per recording session
 static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 
+// Keep a live Mandarin paragraph open while it is being revised. A single
+// 600-millisecond decoder step can legitimately return no text while speech is
+// continuing, so it must not be treated as an endpoint by itself.
+const LIVE_CAPTION_ENDPOINT_EMPTY_CHUNKS: u8 = 4;
+
+#[derive(Debug, Clone, PartialEq)]
+struct AssembledCaption {
+    text: String,
+    sequence_id: u64,
+    audio_start_time: f64,
+    audio_end_time: f64,
+    is_partial: bool,
+    confidence: Option<f32>,
+}
+
+struct LiveCaptionAssembler {
+    current: Option<AssembledCaption>,
+    consecutive_empty_chunks: u8,
+}
+
+impl Default for LiveCaptionAssembler {
+    fn default() -> Self {
+        Self {
+            current: None,
+            consecutive_empty_chunks: 0,
+        }
+    }
+}
+
+impl LiveCaptionAssembler {
+    fn ingest(
+        &mut self,
+        incoming: &str,
+        audio_start_time: f64,
+        audio_end_time: f64,
+        confidence: Option<f32>,
+    ) -> Option<AssembledCaption> {
+        let incoming = incoming.trim();
+        if incoming.is_empty() {
+            if self.current.is_none() {
+                self.consecutive_empty_chunks = 0;
+                return None;
+            }
+            self.consecutive_empty_chunks = self.consecutive_empty_chunks.saturating_add(1);
+            return (self.consecutive_empty_chunks >= LIVE_CAPTION_ENDPOINT_EMPTY_CHUNKS)
+                .then(|| self.finish())
+                .flatten();
+        }
+        self.consecutive_empty_chunks = 0;
+
+        let current = self.current.get_or_insert_with(|| AssembledCaption {
+            text: String::new(),
+            sequence_id: SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst),
+            audio_start_time,
+            audio_end_time,
+            is_partial: true,
+            confidence,
+        });
+        current.text = append_streaming_text(&current.text, incoming);
+        current.audio_end_time = audio_end_time;
+        current.confidence = confidence.or(current.confidence);
+
+        let reached_endpoint = ends_with_sentence_boundary(&current.text);
+        current.is_partial = !reached_endpoint;
+        let update = current.clone();
+        if reached_endpoint {
+            self.current = None;
+        }
+        Some(update)
+    }
+
+    fn finish(&mut self) -> Option<AssembledCaption> {
+        self.consecutive_empty_chunks = 0;
+        self.current.take().map(|mut caption| {
+            caption.is_partial = false;
+            caption
+        })
+    }
+}
+
+fn ends_with_sentence_boundary(text: &str) -> bool {
+    text.chars().last().is_some_and(|character| {
+        matches!(character, '。' | '！' | '？' | '；' | '.' | '!' | '?' | ';')
+    })
+}
+
+fn append_streaming_text(current: &str, incoming: &str) -> String {
+    if current.is_empty() {
+        return incoming.to_string();
+    }
+
+    let max_overlap = current
+        .chars()
+        .count()
+        .min(incoming.chars().count())
+        .min(12);
+    for overlap in (1..=max_overlap).rev() {
+        let suffix: String = current
+            .chars()
+            .rev()
+            .take(overlap)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let prefix: String = incoming.chars().take(overlap).collect();
+        if suffix == prefix {
+            return format!(
+                "{}{}",
+                current,
+                incoming.chars().skip(overlap).collect::<String>()
+            );
+        }
+    }
+
+    let needs_space = current
+        .chars()
+        .last()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        && incoming
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric());
+    format!(
+        "{}{}{}",
+        current,
+        if needs_space { " " } else { "" },
+        incoming
+    )
+}
+
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
@@ -106,6 +237,7 @@ pub fn start_transcription_task<R: Runtime>(
 
             let worker_handle = tokio::spawn(async move {
                 info!("👷 Worker {} started", worker_id);
+                let mut caption_assembler = LiveCaptionAssembler::default();
 
                 // PRE-VALIDATE model state to avoid repeated async calls per chunk
                 let initial_model_loaded = engine_clone.is_model_loaded().await;
@@ -186,10 +318,57 @@ pub fn start_transcription_task<R: Runtime>(
                                     let meets_threshold =
                                         confidence_opt.map_or(true, |c| c >= confidence_threshold);
 
-                                    if !transcript.trim().is_empty() && meets_threshold {
+                                    let is_streaming_funasr =
+                                        matches!(&engine_clone, TranscriptionEngine::FunAsr(_));
+                                    let assembled_caption =
+                                        if meets_threshold && is_streaming_funasr {
+                                            caption_assembler.ingest(
+                                                &transcript,
+                                                chunk_timestamp,
+                                                chunk_timestamp + chunk_duration,
+                                                confidence_opt,
+                                            )
+                                        } else if meets_threshold && !transcript.trim().is_empty() {
+                                            Some(AssembledCaption {
+                                                text: transcript.clone(),
+                                                sequence_id: SEQUENCE_COUNTER
+                                                    .fetch_add(1, Ordering::SeqCst),
+                                                audio_start_time: chunk_timestamp,
+                                                audio_end_time: chunk_timestamp + chunk_duration,
+                                                is_partial,
+                                                confidence: confidence_opt,
+                                            })
+                                        } else {
+                                            None
+                                        };
+
+                                    if let Some(mut caption) = assembled_caption {
+                                        // Online Paraformer intentionally emits plain partial
+                                        // text. Restore punctuation only once the endpoint is
+                                        // stable so commas do not jump around while speaking.
+                                        if !caption.is_partial {
+                                            if let TranscriptionEngine::FunAsr(funasr_engine) =
+                                                &engine_clone
+                                            {
+                                                match funasr_engine
+                                                    .punctuate_streaming_endpoint(&caption.text)
+                                                    .await
+                                                {
+                                                    Ok(text) if !text.trim().is_empty() => {
+                                                        caption.text = text;
+                                                    }
+                                                    Ok(_) => {}
+                                                    Err(error) => warn!(
+                                                        "Worker {}: live punctuation failed: {}",
+                                                        worker_id, error
+                                                    ),
+                                                }
+                                            }
+                                        }
+
                                         // PERFORMANCE: Only log transcription results, not every processing step
                                         info!("✅ Worker {} transcribed: {} (confidence: {}, partial: {})",
-                                              worker_id, transcript, confidence_str, is_partial);
+                                              worker_id, caption.text, confidence_str, caption.is_partial);
 
                                         // Emit speech-detected event for frontend UX (only on first detection per session)
                                         // This is lightweight and provides better user feedback
@@ -209,12 +388,6 @@ pub fn start_transcription_task<R: Runtime>(
                                             info!("🔍 Speech already detected in this session, not re-emitting");
                                         }
 
-                                        // Generate sequence ID and calculate timestamps FIRST
-                                        let sequence_id =
-                                            SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                        let audio_start_time = chunk_timestamp; // Already in seconds from recording start
-                                        let audio_end_time = chunk_timestamp + chunk_duration;
-
                                         // Save structured transcript segment to recording manager (only final results)
                                         // Save ALL segments (partial and final) to ensure complete JSON
                                         // Create structured segment with full timestamp data
@@ -225,17 +398,18 @@ pub fn start_transcription_task<R: Runtime>(
                                         // Emit transcript update with NEW recording-relative timestamps
 
                                         let update = TranscriptUpdate {
-                                            text: transcript,
+                                            text: caption.text,
                                             timestamp: format_current_timestamp(), // Wall-clock for reference
                                             source: "Audio".to_string(),
-                                            sequence_id,
-                                            chunk_start_time: chunk_timestamp, // Legacy compatibility
-                                            is_partial,
-                                            confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
+                                            sequence_id: caption.sequence_id,
+                                            chunk_start_time: caption.audio_start_time, // Legacy compatibility
+                                            is_partial: caption.is_partial,
+                                            confidence: caption.confidence.unwrap_or(0.85), // Default for providers without confidence
                                             // NEW: Recording-relative timestamps for sync
-                                            audio_start_time,
-                                            audio_end_time,
-                                            duration: chunk_duration,
+                                            audio_start_time: caption.audio_start_time,
+                                            audio_end_time: caption.audio_end_time,
+                                            duration: caption.audio_end_time
+                                                - caption.audio_start_time,
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
@@ -548,7 +722,10 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             }
         }
         TranscriptionEngine::FunAsr(funasr_engine) => {
-            match funasr_engine.transcribe_streaming(&speech_samples, false).await {
+            match funasr_engine
+                .transcribe_streaming(&speech_samples, false)
+                .await
+            {
                 Ok(result) => {
                     let text = result.text.trim().to_string();
                     info!(
@@ -638,4 +815,75 @@ fn format_recording_time(seconds: f64) -> String {
     let secs = total_seconds % 60;
 
     format!("[{:02}:{:02}]", minutes, secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_caption_reuses_sequence_until_sentence_endpoint() {
+        let mut assembler = LiveCaptionAssembler::default();
+        let first = assembler
+            .ingest("今天讨论", 0.0, 1.2, Some(0.8))
+            .expect("first update");
+        let second = assembler
+            .ingest("讨论产品计划。", 1.2, 2.4, Some(0.9))
+            .expect("second update");
+
+        assert_eq!(first.sequence_id, second.sequence_id);
+        assert_eq!(second.text, "今天讨论产品计划。");
+        assert!(!second.is_partial);
+
+        let next = assembler
+            .ingest("下一项", 2.4, 3.6, None)
+            .expect("next sentence");
+        assert_ne!(second.sequence_id, next.sequence_id);
+    }
+
+    #[test]
+    fn live_caption_finalizes_on_silence() {
+        let mut assembler = LiveCaptionAssembler::default();
+        let partial = assembler
+            .ingest("没有标点的一句话", 0.0, 0.6, None)
+            .expect("partial update");
+        assert!(assembler.ingest("", 0.6, 1.2, None).is_none());
+        assert!(assembler.ingest("", 1.2, 1.8, None).is_none());
+        assert!(assembler.ingest("", 1.8, 2.4, None).is_none());
+        let final_update = assembler
+            .ingest("", 2.4, 3.0, None)
+            .expect("silence finalization");
+
+        assert_eq!(partial.sequence_id, final_update.sequence_id);
+        assert_eq!(partial.text, final_update.text);
+        assert!(!final_update.is_partial);
+        assert!(assembler.finish().is_none());
+    }
+
+    #[test]
+    fn isolated_empty_decoder_step_does_not_split_live_speech() {
+        let mut assembler = LiveCaptionAssembler::default();
+        let first = assembler
+            .ingest("我觉得主要是费用", 0.0, 0.6, None)
+            .expect("first update");
+        assert!(assembler.ingest("", 0.6, 1.2, None).is_none());
+        assert!(assembler.ingest("", 1.2, 1.8, None).is_none());
+        assert!(assembler.ingest("", 1.8, 2.4, None).is_none());
+        let continued = assembler
+            .ingest("用出口的问题", 2.4, 3.0, None)
+            .expect("continued update");
+
+        assert_eq!(continued.sequence_id, first.sequence_id);
+        assert_eq!(continued.text, "我觉得主要是费用出口的问题");
+        assert!(continued.is_partial);
+    }
+
+    #[test]
+    fn live_caption_does_not_split_continuous_speech_by_elapsed_time() {
+        let mut assembler = LiveCaptionAssembler::default();
+        let update = assembler
+            .ingest("持续讲话", 0.0, 120.0, None)
+            .expect("continuous update");
+        assert!(update.is_partial);
+    }
 }

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const LIVE_MEETING_NOTES_KEY = "calmee.active-live-meeting-notes";
 export const LIVE_MEETING_NOTES_EVENT = "calmee-live-meeting-notes-changed";
+export const LIVE_MEETING_NOTES_CHANNEL = "calmee-live-meeting-notes-sync";
 
 export type LiveMeetingNotesState = {
   markdown: string;
@@ -33,6 +34,11 @@ export function writeLiveMeetingNotes(markdown: string) {
   window.dispatchEvent(
     new CustomEvent(LIVE_MEETING_NOTES_EVENT, { detail: value }),
   );
+  if (typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel(LIVE_MEETING_NOTES_CHANNEL);
+    channel.postMessage(value);
+    channel.close();
+  }
 }
 
 export function clearLiveMeetingNotes() {
@@ -43,6 +49,11 @@ export function clearLiveMeetingNotes() {
       detail: { markdown: "", updatedAt: "" },
     }),
   );
+  if (typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel(LIVE_MEETING_NOTES_CHANNEL);
+    channel.postMessage({ markdown: "", updatedAt: "" });
+    channel.close();
+  }
 }
 
 export async function persistLiveMeetingNotes(meetingId: string) {

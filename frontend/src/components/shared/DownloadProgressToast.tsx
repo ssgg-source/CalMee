@@ -3,8 +3,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
-import { X, Download, Check, Loader2, ArrowBigDownDash } from 'lucide-react';
+import { X, Check, ArrowBigDownDash } from 'lucide-react';
 import { getDownloadTotalMb } from '@/lib/onboarding-summary-model';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface DownloadProgress {
   modelName: string;
@@ -18,35 +20,6 @@ interface DownloadProgress {
   error?: string;
 }
 
-// Categorize error messages for better user experience
-function categorizeError(error: string): string {
-  const lowerError = error.toLowerCase();
-
-  if (lowerError.includes('network') ||
-    lowerError.includes('connection') ||
-    lowerError.includes('timeout') ||
-    lowerError.includes('failed to start download')) {
-    return 'Network error - Check your internet connection';
-  }
-
-  if (lowerError.includes('status:') || lowerError.includes('http')) {
-    return 'Server error - Download temporarily unavailable';
-  }
-
-  if (lowerError.includes('disk') ||
-    lowerError.includes('write') ||
-    lowerError.includes('file')) {
-    return 'Storage error - Check available disk space';
-  }
-
-  if (lowerError.includes('invalid') || lowerError.includes('validation')) {
-    return 'File validation failed - Please retry download';
-  }
-
-  // Fallback to original error
-  return error;
-}
-
 // Custom toast component for download progress
 function DownloadToastContent({
   download,
@@ -55,6 +28,8 @@ function DownloadToastContent({
   download: DownloadProgress;
   onDismiss?: () => void;
 }) {
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const isComplete = download.status === 'completed';
   const hasError = download.status === 'error';
   const isCancelled = download.status === 'cancelled';
@@ -86,11 +61,11 @@ function DownloadToastContent({
         </div>
 
         {hasError ? (
-          <p className="text-xs text-red-600">{download.error || 'Download failed'}</p>
+          <p className="text-xs text-red-600">{download.error || (zh ? '下载失败，请重试。' : 'Download failed. Please try again.')}</p>
         ) : isComplete ? (
-          <p className="text-xs text-green-600">Download complete</p>
+          <p className="text-xs text-green-600">{zh ? '下载完成' : 'Download complete'}</p>
         ) : isCancelled ? (
-          <p className="text-xs text-gray-600">Download cancelled</p>
+          <p className="text-xs text-gray-600">{zh ? '下载已取消' : 'Download cancelled'}</p>
         ) : (
           <>
             {/* Progress bar */}
@@ -118,12 +93,19 @@ function DownloadToastContent({
           </>
         )}
       </div>
+      {onDismiss && (
+        <button type="button" onClick={onDismiss} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={zh ? '隐藏下载进度' : 'Hide download progress'}>
+          <X className="h-4 w-4" />
+        </button>
+      )}
     </div>
   );
 }
 
 // Hook to manage download progress toasts
 export function useDownloadProgressToast() {
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const [downloads, setDownloads] = useState<Map<string, DownloadProgress>>(new Map());
   const [dismissedModels, setDismissedModels] = useState<Set<string>>(new Set());
 
@@ -180,14 +162,14 @@ export function useDownloadProgressToast() {
     };
 
     toast.custom(
-      (t) => (
+      () => (
         <DownloadToastContent
           download={download}
           onDismiss={dismissToast}
         />
       ),
       {
-        position: 'top-right',
+        position: 'bottom-center',
         id: toastId,
         duration: getDuration(),
       }
@@ -233,7 +215,7 @@ export function useDownloadProgressToast() {
 
       const downloadData: DownloadProgress = {
         modelName,
-        displayName: 'Transcription Model (Parakeet)',
+        displayName: zh ? '转写模型（Parakeet）' : 'Transcription model (Parakeet)',
         progress,
         downloadedMb: downloaded_mb ?? 0,
         totalMb: total_mb ?? 670,
@@ -260,7 +242,7 @@ export function useDownloadProgressToast() {
         const { modelName } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Parakeet)',
+          displayName: zh ? '转写模型（Parakeet）' : 'Transcription model (Parakeet)',
           progress: 100,
           downloadedMb: 670,
           totalMb: 670,
@@ -277,15 +259,16 @@ export function useDownloadProgressToast() {
       'parakeet-model-download-error',
       (event) => {
         const { modelName, error } = event.payload;
+        reportTechnicalError('parakeet-model-download-error', error);
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Parakeet)',
+          displayName: zh ? '转写模型（Parakeet）' : 'Transcription model (Parakeet)',
           progress: 0,
           downloadedMb: 0,
           totalMb: 670,
           speedMbps: 0,
           status: 'error',
-          error: categorizeError(error),
+          error: toUserFacingError(error, locale).message,
         };
         updateDownload(modelName, downloadData);
         // Clean up after 11 seconds (error toast duration is 10s + 1s buffer)
@@ -298,7 +281,7 @@ export function useDownloadProgressToast() {
       unlistenComplete.then((fn) => fn());
       unlistenError.then((fn) => fn());
     };
-  }, [updateDownload, cleanupDownload]);
+  }, [cleanupDownload, locale, updateDownload, zh]);
 
   // Listen to Built-in AI summary model download events
   useEffect(() => {
@@ -312,10 +295,11 @@ export function useDownloadProgressToast() {
       error?: string;
     }>('builtin-ai-download-progress', (event) => {
       const { model, progress, downloaded_mb, total_mb, speed_mbps, status, error } = event.payload;
+      if (status === 'error') reportTechnicalError('builtin-ai-download-progress', error);
 
       const downloadData: DownloadProgress = {
         modelName: model,
-        displayName: `Summary Model (${model})`,
+        displayName: zh ? `总结模型（${model}）` : `Summary model (${model})`,
         progress: progress ?? 0,
         downloadedMb: downloaded_mb ?? 0,
         totalMb: getDownloadTotalMb(total_mb, model),
@@ -328,7 +312,7 @@ export function useDownloadProgressToast() {
             : status === 'error'
               ? 'error'
               : 'downloading',
-        error: status === 'error' ? categorizeError(error || 'Download failed') : undefined,
+        error: status === 'error' ? toUserFacingError(error || 'Download failed', locale).message : undefined,
       };
 
       updateDownload(model, downloadData);
@@ -346,7 +330,7 @@ export function useDownloadProgressToast() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [updateDownload, cleanupDownload]);
+  }, [cleanupDownload, locale, updateDownload, zh]);
 
   return { downloads };
 }

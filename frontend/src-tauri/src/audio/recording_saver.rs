@@ -53,8 +53,7 @@ pub struct RecordingSaver {
     meeting_name: Option<String>,
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
-    chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
-    is_saving: Arc<Mutex<bool>>,
+    accumulation_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingSaver {
@@ -65,8 +64,7 @@ impl RecordingSaver {
             meeting_name: None,
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
-            chunk_receiver: None,
-            is_saving: Arc::new(Mutex::new(false)),
+            accumulation_task: None,
         }
     }
 
@@ -162,7 +160,6 @@ impl RecordingSaver {
 
         // Create channel for receiving audio chunks
         let (sender, receiver) = mpsc::unbounded_channel::<AudioChunk>();
-        self.chunk_receiver = Some(receiver);
 
         // Initialize meeting folder and incremental saver ONLY if auto_save is enabled
         if auto_save {
@@ -188,57 +185,46 @@ impl RecordingSaver {
             }
         }
 
-        // Start accumulation task
-        let is_saving_clone = self.is_saving.clone();
+        // Start accumulation task. It drains the channel until every sender is
+        // dropped, so stopping cannot discard audio already queued by the
+        // pipeline.
         let incremental_saver_arc = self.incremental_saver.clone();
         let save_audio = auto_save;
-
-        if let Some(mut receiver) = self.chunk_receiver.take() {
-            tokio::spawn(async move {
-                info!(
-                    "Recording saver accumulation task started (save_audio: {})",
-                    save_audio
-                );
-
-                while let Some(chunk) = receiver.recv().await {
-                    // Check if we should continue
-                    let should_continue = if let Ok(is_saving) = is_saving_clone.lock() {
-                        *is_saving
-                    } else {
-                        false
-                    };
-
-                    if !should_continue {
-                        break;
-                    }
-
-                    // Only process audio chunks if auto_save is enabled
-                    if save_audio {
-                        // Add chunk to incremental saver
-                        if let Some(saver_arc) = &incremental_saver_arc {
-                            let mut saver_guard = saver_arc.lock().await;
-                            if let Err(e) = saver_guard.add_chunk(chunk) {
-                                error!("Failed to add chunk to incremental saver: {}", e);
-                            }
-                        } else {
-                            error!("Incremental saver not available while accumulating");
-                        }
-                    } else {
-                        // auto_save is false: discard audio chunk (no-op)
-                        // Transcription already happened in the pipeline before this point
-                    }
-                }
-
-                info!("Recording saver accumulation task ended");
-            });
-        }
-
-        // Set saving flag
-        if let Ok(mut is_saving) = self.is_saving.lock() {
-            *is_saving = true;
-        }
+        self.accumulation_task = Some(tokio::spawn(Self::drain_audio_chunks(
+            receiver,
+            incremental_saver_arc,
+            save_audio,
+        )));
 
         sender
+    }
+
+    async fn drain_audio_chunks(
+        mut receiver: mpsc::UnboundedReceiver<AudioChunk>,
+        incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
+        save_audio: bool,
+    ) {
+        info!(
+            "Recording saver accumulation task started (save_audio: {})",
+            save_audio
+        );
+
+        while let Some(chunk) = receiver.recv().await {
+            if !save_audio {
+                continue;
+            }
+
+            if let Some(saver) = &incremental_saver {
+                let mut saver = saver.lock().await;
+                if let Err(error) = saver.add_chunk(chunk) {
+                    error!("Failed to add chunk to incremental saver: {}", error);
+                }
+            } else {
+                error!("Incremental saver not available while accumulating");
+            }
+        }
+
+        info!("Recording saver accumulation task ended after draining queued audio");
     }
 
     /// Initialize meeting folder structure and metadata
@@ -406,13 +392,14 @@ impl RecordingSaver {
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
 
-        // Stop accumulation
-        if let Ok(mut is_saving) = self.is_saving.lock() {
-            *is_saving = false;
+        // The pipeline has already stopped and dropped its sender. Awaiting the
+        // task here drains every queued tail chunk before finalization.
+        if let Some(task) = self.accumulation_task.take() {
+            if let Err(error) = task.await {
+                self.mark_metadata_error();
+                return Err(format!("Audio accumulation task failed: {}", error));
+            }
         }
-
-        // Give time for final chunks
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         // Check if incremental saver exists (indicates auto_save was enabled)
         let should_save_audio = self.incremental_saver.is_some();
@@ -425,14 +412,18 @@ impl RecordingSaver {
 
         // Finalize incremental saver (merge checkpoints into final audio.mp4)
         let final_audio_path = if let Some(saver_arc) = &self.incremental_saver {
-            let mut saver = saver_arc.lock().await;
-            match saver.finalize().await {
+            let finalize_result = {
+                let mut saver = saver_arc.lock().await;
+                saver.finalize().await
+            };
+            match finalize_result {
                 Ok(path) => {
                     info!("✅ Successfully finalized audio: {}", path.display());
                     path
                 }
                 Err(e) => {
                     error!("❌ Failed to finalize incremental saver: {}", e);
+                    self.mark_metadata_error();
                     return Err(format!("Failed to finalize audio: {}", e));
                 }
             }
@@ -511,6 +502,17 @@ impl RecordingSaver {
         Ok(Some(final_audio_path.to_string_lossy().to_string()))
     }
 
+    fn mark_metadata_error(&mut self) {
+        if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
+            metadata.status = "error".to_string();
+            metadata.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            if let Err(error) = self.write_metadata(folder, &metadata) {
+                warn!("Failed to mark recording metadata as errored: {}", error);
+            }
+            self.metadata = Some(metadata);
+        }
+    }
+
     /// Get the meeting folder path (for passing to backend)
     pub fn get_meeting_folder(&self) -> Option<&PathBuf> {
         self.meeting_folder.as_ref()
@@ -534,5 +536,46 @@ impl RecordingSaver {
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::recording_state::DeviceType;
+
+    fn chunk(id: u64, samples: usize) -> AudioChunk {
+        AudioChunk {
+            data: vec![0.25; samples],
+            sample_rate: 48_000,
+            timestamp: id as f64,
+            chunk_id: id,
+            device_type: DeviceType::Microphone,
+        }
+    }
+
+    #[tokio::test]
+    async fn accumulator_accepts_first_chunk_and_drains_tail_before_exit() {
+        let temp = tempfile::tempdir().expect("temporary meeting folder");
+        std::fs::create_dir(temp.path().join(".checkpoints")).expect("checkpoint directory");
+        let saver = Arc::new(AsyncMutex::new(
+            IncrementalAudioSaver::new(temp.path().to_path_buf(), 48_000)
+                .expect("incremental saver"),
+        ));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let task = tokio::spawn(RecordingSaver::drain_audio_chunks(
+            receiver,
+            Some(saver.clone()),
+            true,
+        ));
+
+        // The first chunk is sent immediately; the second represents audio
+        // queued immediately before the pipeline closes.
+        sender.send(chunk(1, 320)).expect("first chunk");
+        sender.send(chunk(2, 480)).expect("tail chunk");
+        drop(sender);
+        task.await.expect("accumulator task");
+
+        assert_eq!(saver.lock().await.buffered_sample_count(), 800);
     }
 }

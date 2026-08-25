@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarCheck2, Check, ChevronRight, Clock3, FileText, Link2, Search, SlidersHorizontal, Trash2, Unlink, X } from 'lucide-react';
+import { Brain, CalendarCheck2, Check, ChevronRight, Clock3, FileText, Link2, Search, SlidersHorizontal, Trash2, Unlink, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingDeleteDialog } from '@/components/MeetingDeleteDialog';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { openMeetingWorkspace } from '@/lib/meeting-window';
 import { useLanguage } from '@/contexts/LanguageContext';
 
-type Filter='all'|'unlinked'|'today';
+type Filter='all'|'unlinked'|'today'|'dedao';
 type ListItem=CurrentMeeting&{matchContext?:string};
 
 const meetingTime=(meeting:CurrentMeeting)=>meeting.meetingStartTime||meeting.createdAt;
@@ -35,7 +35,8 @@ export default function DashboardPage(){
   const sorted=useMemo(()=>[...meetings].sort((a,b)=>(validDate(meetingTime(b))?.getTime()||0)-(validDate(meetingTime(a))?.getTime()||0)),[meetings]);
   const unlinked=useMemo(()=>meetings.filter(item=>!item.calendarEventId),[meetings]);
   const today=useMemo(()=>meetings.filter(item=>validDate(meetingTime(item))?.toDateString()===todayKey),[meetings,todayKey]);
-  const filtered=useMemo(()=>{const category=filter==='unlinked'?sorted.filter(item=>!item.calendarEventId):filter==='today'?sorted.filter(item=>validDate(meetingTime(item))?.toDateString()===todayKey):sorted;return selectedDateKey?category.filter(item=>{const date=validDate(meetingTime(item));return date&&dateKey(date)===selectedDateKey;}):category;},[filter,sorted,todayKey,selectedDateKey]);
+  const dedao=useMemo(()=>meetings.filter(item=>item.source==='dedao'),[meetings]);
+  const filtered=useMemo(()=>{const category=filter==='unlinked'?sorted.filter(item=>!item.calendarEventId):filter==='today'?sorted.filter(item=>validDate(meetingTime(item))?.toDateString()===todayKey):filter==='dedao'?sorted.filter(item=>item.source==='dedao'):sorted;return selectedDateKey?category.filter(item=>{const date=validDate(meetingTime(item));return date&&dateKey(date)===selectedDateKey;}):category;},[filter,sorted,todayKey,selectedDateKey]);
   const visible:ListItem[]=useMemo(()=>{
     if(!query.trim())return filtered;
     const meetingMap=new Map(meetings.map(item=>[item.id,item]));
@@ -56,6 +57,7 @@ export default function DashboardPage(){
     ['all',t('dashboard.all'),meetings.length,FileText,'text-violet-700 bg-violet-100'],
     ['unlinked',t('dashboard.unlinked'),unlinked.length,Unlink,'text-amber-700 bg-amber-100'],
     ['today',t('dashboard.today'),today.length,CalendarCheck2,'text-emerald-700 bg-emerald-100'],
+    ['dedao',t('dashboard.dedao'),dedao.length,Brain,'text-sky-700 bg-sky-100'],
   ];
 
   return <div className="h-screen overflow-y-auto bg-[#f8f7fb] px-8 pb-12 pt-8 text-slate-900">

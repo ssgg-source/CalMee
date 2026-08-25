@@ -5,9 +5,13 @@ import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { PermissionRow } from '../shared';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { toast } from 'sonner';
 
 export function PermissionsStep() {
   const { setPermissionStatus, setPermissionsSkipped, permissions, completeOnboarding } = useOnboarding();
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const [isPending, setIsPending] = useState(false);
 
   // Check permissions - only logs current state, doesn't auto-authorize
@@ -32,7 +36,7 @@ export function PermissionsStep() {
       try {
         await invoke('open_system_settings');
       } catch {
-        alert('Please enable microphone access in System Preferences > Security & Privacy > Microphone');
+        toast.info(zh ? '请在“系统设置 → 隐私与安全性 → 麦克风”中允许 CalMee 访问。' : 'Enable access in System Settings → Privacy & Security → Microphone.');
       }
       return;
     }
@@ -64,7 +68,7 @@ export function PermissionsStep() {
       try {
         await invoke('open_system_settings');
       } catch {
-        alert('Please enable Audio Capture in System Settings → Privacy & Security → Audio Capture');
+        toast.info(zh ? '请在“系统设置 → 隐私与安全性 → 系统音频录制”中允许 CalMee 访问。' : 'Enable access in System Settings → Privacy & Security → Audio Capture.');
       }
       return;
     }
@@ -113,9 +117,9 @@ export function PermissionsStep() {
 
   return (
     <OnboardingContainer
-      title="Grant Permissions"
-      description="CalMee needs access to your microphone and system audio to record meetings"
-      step={4}
+      title={zh ? '设置录音权限' : 'Set recording permissions'}
+      description={zh ? '仅在录音时使用麦克风和系统音频权限，也可以稍后再设置。' : 'These permissions are used only while recording. You can also configure them later.'}
+      step={3}
       hideProgress={true}
       showNavigation={allPermissionsGranted}
       canGoNext={allPermissionsGranted}
@@ -126,8 +130,8 @@ export function PermissionsStep() {
           {/* Microphone */}
           <PermissionRow
             icon={<Mic className="w-5 h-5" />}
-            title="Microphone"
-            description="Required to capture your voice during meetings"
+            title={zh ? '麦克风' : 'Microphone'}
+            description={zh ? '录制你在会议中的声音' : 'Records your voice during meetings'}
             status={permissions.microphone}
             isPending={isPending}
             onAction={handleMicrophoneAction}
@@ -136,8 +140,8 @@ export function PermissionsStep() {
           {/* System Audio */}
           <PermissionRow
             icon={<Volume2 className="w-5 h-5" />}
-            title="System Audio"
-            description="Click Enable to grant Audio Capture permission"
+            title={zh ? '系统音频' : 'System audio'}
+            description={zh ? '录制电脑播放的会议声音' : 'Records meeting audio played by your computer'}
             status={permissions.systemAudio}
             isPending={isPending}
             onAction={handleSystemAudioAction}
@@ -147,19 +151,19 @@ export function PermissionsStep() {
         {/* Action Buttons */}
         <div className="flex flex-col gap-3 pt-4">
           <Button onClick={handleFinish} disabled={!allPermissionsGranted} className="w-full h-11">
-            Finish Setup
+            {zh ? '完成设置' : 'Finish setup'}
           </Button>
 
           <button
             onClick={handleSkip}
             className="text-sm text-neutral-500 hover:text-neutral-700 transition-colors"
           >
-            I'll do this later
+            {zh ? '稍后再设置' : 'Set up later'}
           </button>
 
           {!allPermissionsGranted && (
             <p className="text-xs text-center text-muted-foreground">
-              Recording won't work without permissions. You can grant them later in settings.
+              {zh ? '未授权前无法录音；之后可随时在设置中授权。' : 'Recording is unavailable until permission is granted. You can enable it later in Settings.'}
             </p>
           )}
         </div>

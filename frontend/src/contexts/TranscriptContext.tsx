@@ -252,24 +252,22 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
       if (allNewTranscripts.length > 0) {
         setTranscripts(prev => {
-          // Create a set of existing sequence_ids for deduplication
-          const existingSequenceIds = new Set(prev.map(t => t.sequence_id).filter(id => id !== undefined));
-
-          // Filter out any new transcripts that already exist
-          const uniqueNewTranscripts = allNewTranscripts.filter(transcript =>
-            transcript.sequence_id !== undefined && !existingSequenceIds.has(transcript.sequence_id)
-          );
-
-          // Only combine if we have unique new transcripts
-          if (uniqueNewTranscripts.length === 0) {
-            console.log('No unique transcripts to add - all were duplicates');
-            return prev; // No new unique transcripts to add
-          }
-
-          console.log(`Adding ${uniqueNewTranscripts.length} unique transcripts out of ${allNewTranscripts.length} received`);
-
-          // Merge with existing transcripts, maintaining chronological order
-          const combined = [...prev, ...uniqueNewTranscripts];
+          // Streaming captions reuse a sequence id while the current sentence
+          // grows. Upsert those revisions instead of discarding them as
+          // duplicates, then keep the established chronological ordering.
+          const bySequence = new Map<number, Transcript>();
+          const withoutSequence = prev.filter(transcript => transcript.sequence_id === undefined);
+          prev.forEach(transcript => {
+            if (transcript.sequence_id !== undefined) {
+              bySequence.set(transcript.sequence_id, transcript);
+            }
+          });
+          allNewTranscripts.forEach(transcript => {
+            if (transcript.sequence_id !== undefined) {
+              bySequence.set(transcript.sequence_id, transcript);
+            }
+          });
+          const combined = [...withoutSequence, ...Array.from(bySequence.values())];
 
           // Sort by chunk_start_time first, then by sequence_id
           return combined.sort((a, b) => {
@@ -313,15 +311,14 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             buffer_size_before: transcriptBuffer.size
           });
 
-          // Check for duplicate sequence_id before processing
-          if (transcriptBuffer.has(update.sequence_id)) {
-            console.log('🚫 MAIN LISTENER: Duplicate sequence_id, skipping buffer:', update.sequence_id);
-            return;
-          }
+          // Keep the visual identity stable while the streaming ASR revises
+          // the same sequence. Changing this id remounts the row and replays
+          // its entrance animation, which makes live captions flash.
+          const bufferedRevision = transcriptBuffer.get(update.sequence_id);
 
           // Create transcript for buffer with NEW timestamp fields
           const newTranscript: Transcript = {
-            id: `${Date.now()}-${transcriptCounter++}`,
+            id: bufferedRevision?.id ?? `${Date.now()}-${transcriptCounter++}`,
             text: cleanedText,
             timestamp: update.timestamp,
             sequence_id: update.sequence_id,
@@ -334,7 +331,34 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             duration: update.duration,
           };
 
-          // Add to buffer
+          // A sentence may already be visible when its next streaming revision
+          // arrives. Update it in place rather than re-entering the sequential
+          // buffer, whose cursor has already advanced past this id.
+          if (update.sequence_id <= lastProcessedSequence) {
+            setTranscripts(prev => {
+              const existingIndex = prev.findIndex(
+                transcript => transcript.sequence_id === update.sequence_id
+              );
+              if (existingIndex < 0) {
+                return [...prev, newTranscript].sort(
+                  (a, b) => (a.sequence_id || 0) - (b.sequence_id || 0)
+                );
+              }
+              const next = [...prev];
+              next[existingIndex] = {
+                ...newTranscript,
+                id: prev[existingIndex].id,
+              };
+              return next;
+            });
+            if (currentMeetingId) {
+              indexedDBService.saveTranscript(currentMeetingId, update)
+                .catch(err => console.warn('IndexedDB save failed:', err));
+            }
+            return;
+          }
+
+          // Add or replace the current buffered revision.
           transcriptBuffer.set(update.sequence_id, newTranscript);
           console.log(`✅ MAIN LISTENER: Buffered transcript with sequence_id ${update.sequence_id}. Buffer size: ${transcriptBuffer.size}, Last processed: ${lastProcessedSequence}`);
 

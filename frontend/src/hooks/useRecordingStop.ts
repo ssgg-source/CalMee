@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -29,14 +30,14 @@ interface UseRecordingStopReturn {
 
 /**
  * Custom hook for managing recording stop lifecycle.
- * Handles the complex stop sequence: transcription wait → buffer flush → SQLite save → navigation.
+ * Handles the complex stop sequence: transcription wait → buffer flush → SQLite save.
  *
  * Features:
  * - Transcription completion polling (60s max, 500ms interval)
  * - Transcript buffer flush coordination
  * - SQLite meeting save with folder_path from sessionStorage
  * - Comprehensive analytics tracking (duration, word count, activation)
- * - Auto-navigation to meeting details
+ * - Explicit navigation to meeting details after the user chooses "View meeting"
  * - Toast notifications for success/error
  * - Window exposure for Rust callbacks
  */
@@ -273,7 +274,7 @@ export function useRecordingStop(
 
         try {
           const responseData = await storageService.saveMeeting(
-            savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
+            meetingTitle || savedMeetingName || 'New Meeting',
             freshTranscripts,
             folderPath
           );
@@ -321,9 +322,21 @@ export function useRecordingStop(
             });
           }
 
-          // Stopping a recording only persists the audio, live preview and
-          // meeting notes. Full ASR is explicitly started from the meeting
-          // workspace and atomically replaces this preview when it succeeds.
+          const calendarEventId = sessionStorage.getItem('recording_calendar_event_id');
+          if (calendarEventId) {
+            try {
+              await invoke('api_link_meeting_calendar_event', {
+                meetingId,
+                eventId: calendarEventId,
+              });
+            } catch (error) {
+              console.warn('Failed to link recording to calendar event:', error);
+              toast.warning(zh ? '会议已保存，但日程尚未关联' : 'Meeting saved, but the calendar event was not linked');
+            }
+          }
+
+          // Stopping a recording persists the source audio and meeting notes.
+          // Full ASR remains an explicit post-meeting action.
 
           // Mark meeting as saved in IndexedDB (for recovery system)
           await markMeetingAsSaved();
@@ -334,6 +347,7 @@ export function useRecordingStop(
           sessionStorage.removeItem('recording_live_transcription');
           sessionStorage.removeItem('recording_live_transcription_is_preview');
           sessionStorage.removeItem('recording_transcription_model');
+          sessionStorage.removeItem('recording_calendar_event_id');
           // Clean up IndexedDB meeting ID (redundant with markMeetingAsSaved cleanup, but ensures cleanup)
           sessionStorage.removeItem('indexeddb_current_meeting_id');
 
@@ -372,15 +386,11 @@ export function useRecordingStop(
             duration: 10000,
           });
 
-          // Auto-navigate after a short delay with source parameter
-          setTimeout(() => {
-            void openMeetingWorkspace(meetingId, url => router.push(url), { source: 'recording', title: savedMeetingName || meetingTitle || undefined });
-            clearTranscripts()
-            Analytics.trackPageView('meeting_details');
-
-            // Reset to IDLE after navigation
-            setStatus(RecordingStatus.IDLE);
-          }, 2000);
+          // The saved meeting is now the durable copy. Return the recording
+          // workspace to a clean, ready state without navigating into the
+          // meeting workspace. Reviewing it remains an explicit user action.
+          clearTranscripts();
+          setStatus(RecordingStatus.IDLE);
           // Track meeting completion analytics
           try {
             // Calculate meeting duration from transcript timestamps
@@ -456,6 +466,7 @@ export function useRecordingStop(
     } finally {
       sessionStorage.removeItem('recording_live_transcription');
       sessionStorage.removeItem('recording_live_transcription_is_preview');
+      sessionStorage.removeItem('recording_calendar_event_id');
       // Always reset the guard flag when done
       stopInProgressRef.current = false;
     }

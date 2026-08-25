@@ -6,18 +6,20 @@ import { CalendarDays, CheckCircle2, Cloud, Loader2, RefreshCw, Save } from 'luc
 import { toast } from 'sonner';
 import { Switch } from '@/components/ui/switch';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 type Settings = { localEnabled:boolean;caldavEnabled:boolean;caldavUrl?:string;caldavUsername?:string;caldavPassword?:string;caldavCalendarPath?:string;syncMode:string;lastSyncAt?:string };
 const defaults:Settings={localEnabled:false,caldavEnabled:false,syncMode:'two_way'};
 
 export function CalendarSettings(){
-  const {t,dateLocale}=useLanguage();
+  const {t,dateLocale,locale}=useLanguage();
+  const showError=(title:string,error:unknown)=>{reportTechnicalError('calendar-settings',error);toast.error(title,{description:toUserFacingError(error,locale).message});};
   const [value,setValue]=useState<Settings>(defaults);
   const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(false);const [testing,setTesting]=useState(false);const [syncing,setSyncing]=useState(false);
-  useEffect(()=>{invoke<Settings>('api_get_calendar_settings').then(setValue).catch(error=>toast.error(t('calendarSettings.loadFailed'),{description:String(error)})).finally(()=>setLoading(false));},[t]);
-  const save=async()=>{setSaving(true);try{await invoke('api_save_calendar_settings',{settings:value});toast.success(t('calendarSettings.saved'));}catch(error){toast.error(t('calendar.saveFailed'),{description:String(error)});}finally{setSaving(false);}};
-  const test=async()=>{await save();setTesting(true);try{toast.success(await invoke<string>('api_test_caldav'));}catch(error){toast.error(t('calendarSettings.connectionFailed'),{description:String(error)});}finally{setTesting(false);}};
-  const sync=async()=>{await save();setSyncing(true);try{const now=new Date(),start=new Date(now.getFullYear(),now.getMonth()-1,1),end=new Date(now.getFullYear(),now.getMonth()+2,1);const result=await invoke<any>('api_sync_calendars',{startAt:start.toISOString(),endAt:end.toISOString()});toast.success(t('calendarSettings.syncResult',{local:result.local,caldav:result.caldav}),result.warnings?.length?{description:result.warnings.join('; ')}:undefined);}catch(error){toast.error(t('calendar.syncFailed'),{description:String(error)});}finally{setSyncing(false);}};
+  useEffect(()=>{invoke<Settings>('api_get_calendar_settings').then(setValue).catch(error=>showError(t('calendarSettings.loadFailed'),error)).finally(()=>setLoading(false));},[t]);
+  const save=async()=>{setSaving(true);try{await invoke('api_save_calendar_settings',{settings:value});toast.success(t('calendarSettings.saved'));}catch(error){showError(t('calendar.saveFailed'),error);}finally{setSaving(false);}};
+  const test=async()=>{await save();setTesting(true);try{toast.success(await invoke<string>('api_test_caldav'));}catch(error){showError(t('calendarSettings.connectionFailed'),error);}finally{setTesting(false);}};
+  const sync=async()=>{await save();setSyncing(true);try{const now=new Date(),start=new Date(now.getFullYear(),now.getMonth()-1,1),end=new Date(now.getFullYear(),now.getMonth()+2,1);const result=await invoke<any>('api_sync_calendars',{startAt:start.toISOString(),endAt:end.toISOString()});toast.success(t('calendarSettings.syncResult',{local:result.local,caldav:result.caldav}));if(result.warnings?.length){reportTechnicalError('calendar-sync-warnings',result.warnings);toast.warning(t('calendar.partialSync'),{description:toUserFacingError(result.warnings.join('; '),locale).message});}}catch(error){showError(t('calendar.syncFailed'),error);}finally{setSyncing(false);}};
   if(loading)return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-violet-600"/></div>;
   const input='w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100';
   return <div className="mt-6 space-y-6">

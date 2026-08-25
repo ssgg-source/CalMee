@@ -11,8 +11,8 @@ audio/video, transcribe it with a local ASR engine, turn the transcript into edi
 meeting documents with a local or cloud AI model, and link the result back to the
 calendar event it belongs to.
 
-CalMee is designed to be useful as an open-source application on its own. The
-community edition is not a demo or a time-limited build.
+CalMee is one full-featured open-source application. There is no separate Pro
+edition, feature gate, trial period, or license activation path.
 
 > **Status:** pre-release. The repository is being prepared for its first public
 > alpha. Do not rely on the current build as the only copy of an important recording.
@@ -70,7 +70,7 @@ servers. Meeting notes can be linked to events, while unlinked recordings and im
 remain visible in a meeting-notes inbox until they are organized. The result is a
 searchable meeting workspace built around when and why a conversation happened.
 
-## Core community features
+## Core features
 
 - Microphone and system-audio recording on supported platforms
 - Audio and video import without forced background transcription
@@ -81,6 +81,7 @@ searchable meeting workspace built around when and why a conversation happened.
 - Local AI and bring-your-own-key cloud model connections
 - Meeting dashboard, search, tags, calendar linking, and local data management
 - On-device macOS calendar support and standards-based CalDAV integration
+- Explicit import from supported external note services, beginning with Dedao Brain
 - English and Simplified Chinese interfaces
 
 The current public-alpha scope is documented in
@@ -146,6 +147,6 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md),
 CalMee is derived in part from the MIT-licensed Meetily project by Zackriya Solutions.
 CalMee is independent and is not affiliated with or endorsed by Zackriya Solutions.
 
-The upstream copyright notice is retained. New community-edition code is also released
+The upstream copyright notice is retained. New CalMee code is also released
 under the MIT License. Model weights and other dependencies can use different licenses;
 consult [LICENSE.md](./LICENSE.md) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

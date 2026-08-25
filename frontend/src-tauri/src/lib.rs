@@ -145,13 +145,21 @@ async fn start_recording<R: Runtime>(
 }
 
 #[tauri::command]
-async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<(), String> {
+async fn stop_recording<R: Runtime>(
+    app: AppHandle<R>,
+    args: RecordingArgs,
+) -> Result<audio::RecordingStoppedPayload, String> {
     log_info!("Attempting to stop recording...");
 
     // Check the actual audio recording system state instead of the flag
     if !audio::recording_commands::is_recording().await {
         log_info!("Recording is already stopped");
-        return Ok(());
+        return Ok(audio::RecordingStoppedPayload {
+            message: "Recording was already stopped".to_string(),
+            folder_path: None,
+            meeting_name: None,
+            audio_path: None,
+        });
     }
 
     // Call the actual audio recording system to stop
@@ -163,21 +171,9 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
     )
     .await
     {
-        Ok(_) => {
+        Ok(payload) => {
             RECORDING_FLAG.store(false, Ordering::SeqCst);
             tray::update_tray_menu(&app);
-
-            // Create the save directory if it doesn't exist
-            if let Some(parent) = std::path::Path::new(&args.save_path).parent() {
-                if !parent.exists() {
-                    log_info!("Creating directory: {:?}", parent);
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        let err_msg = format!("Failed to create save directory: {}", e);
-                        log_error!("{}", err_msg);
-                        return Err(err_msg);
-                    }
-                }
-            }
 
             // Show recording stopped notification through NotificationManager
             // This respects user's notification preferences
@@ -193,7 +189,7 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
                 log_info!("Successfully showed recording stopped notification");
             }
 
-            Ok(())
+            Ok(payload)
         }
         Err(e) => {
             log_error!("Failed to stop audio recording: {}", e);
@@ -203,6 +199,31 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
             Err(format!("Failed to stop recording: {}", e))
         }
     }
+}
+
+#[tauri::command]
+async fn discard_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if !audio::recording_commands::is_recording().await {
+        return Err("No recording is currently active".to_string());
+    }
+
+    let payload = audio::recording_commands::stop_recording(
+        app.clone(),
+        audio::recording_commands::RecordingArgs {
+            save_path: String::new(),
+        },
+    )
+    .await?;
+    let folder_path = payload
+        .folder_path
+        .ok_or_else(|| "The current recording folder was unavailable".to_string())?;
+    audio::recording_commands::discard_saved_recording_folder(&folder_path)?;
+
+    RECORDING_FLAG.store(false, Ordering::SeqCst);
+    tray::update_tray_menu(&app);
+    app.emit("recording-discarded", ())
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -563,6 +584,7 @@ pub fn run() {
             legacy_hotwords::api_apply_legacy_hotword_disposition,
             start_recording,
             stop_recording,
+            discard_recording,
             is_recording,
             get_transcription_status,
             read_audio_file,
@@ -698,6 +720,8 @@ pub fn run() {
             calendar_integration::api_delete_calendar_event,
             calendar_integration::api_update_meeting_schedule,
             calendar_integration::api_import_external_meeting_record,
+            calendar_integration::api_list_dedao_notes,
+            calendar_integration::api_import_dedao_notes,
             meeting_workspace::api_get_meeting_document,
             meeting_workspace::api_save_meeting_document,
             meeting_workspace::api_get_meeting_notes,

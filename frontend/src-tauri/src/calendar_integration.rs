@@ -4,7 +4,7 @@ use regex::Regex;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use tauri::{AppHandle, Runtime};
 use uuid::Uuid;
@@ -19,6 +19,14 @@ pub struct CalendarSettings {
     pub caldav_password: Option<String>,
     pub caldav_calendar_path: Option<String>,
     pub sync_mode: String,
+    pub dedao_enabled: bool,
+    pub dedao_api_key: Option<String>,
+    pub dedao_client_id: Option<String>,
+    pub dedao_recording_only: bool,
+    pub dedao_content_mode: String,
+    pub dedao_conflict_mode: String,
+    pub dedao_authorized_at: Option<String>,
+    pub dedao_last_sync_at: Option<String>,
     pub last_sync_at: Option<String>,
 }
 
@@ -72,6 +80,36 @@ pub struct CalendarEventInput {
 pub struct ExternalMeetingImportResult {
     pub meeting_id: String,
     pub transcript_blocks: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoNotePreview {
+    pub note_id: String,
+    pub title: String,
+    pub content_preview: String,
+    pub note_type: String,
+    pub tags: Vec<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub imported: bool,
+    pub has_audio: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoNotesPage {
+    pub notes: Vec<DedaoNotePreview>,
+    pub cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedaoImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +271,8 @@ struct NativeCalendar {
 
 #[derive(Debug, Deserialize)]
 struct NativePayload {
+    #[serde(default)]
+    complete: bool,
     calendars: Vec<NativeCalendar>,
     events: Vec<NativeEvent>,
 }
@@ -273,7 +313,7 @@ async fn upsert_native_calendar(
 }
 
 async fn read_settings(pool: &SqlitePool) -> Result<CalendarSettings, String> {
-    sqlx::query_as::<_, CalendarSettings>("SELECT local_enabled,caldav_enabled,caldav_url,caldav_username,caldav_password,caldav_calendar_path,sync_mode,last_sync_at FROM calendar_settings WHERE id='default'")
+    sqlx::query_as::<_, CalendarSettings>("SELECT local_enabled,caldav_enabled,caldav_url,caldav_username,caldav_password,caldav_calendar_path,sync_mode,dedao_enabled,dedao_api_key,dedao_client_id,dedao_recording_only,dedao_content_mode,dedao_conflict_mode,dedao_authorized_at,dedao_last_sync_at,last_sync_at FROM calendar_settings WHERE id='default'")
         .fetch_one(pool).await.map_err(|e| e.to_string())
 }
 
@@ -289,12 +329,25 @@ pub async fn api_get_calendar_settings<R: Runtime>(
 pub async fn api_save_calendar_settings<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    settings: CalendarSettings,
+    mut settings: CalendarSettings,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE calendar_settings SET local_enabled=?,caldav_enabled=?,caldav_url=?,caldav_username=?,caldav_password=?,caldav_calendar_path=?,sync_mode=?,updated_at=? WHERE id='default'")
+    let reversed = settings
+        .dedao_client_id
+        .as_deref()
+        .is_some_and(|value| value.trim().starts_with("gk_"))
+        && settings
+            .dedao_api_key
+            .as_deref()
+            .is_some_and(|value| value.trim().starts_with("cli_"));
+    if reversed {
+        std::mem::swap(&mut settings.dedao_client_id, &mut settings.dedao_api_key);
+    }
+    sqlx::query("UPDATE calendar_settings SET local_enabled=?,caldav_enabled=?,caldav_url=?,caldav_username=?,caldav_password=?,caldav_calendar_path=?,sync_mode=?,dedao_enabled=?,dedao_api_key=?,dedao_client_id=?,dedao_recording_only=?,dedao_content_mode=?,dedao_conflict_mode=?,updated_at=? WHERE id='default'")
         .bind(settings.local_enabled).bind(settings.caldav_enabled).bind(settings.caldav_url)
         .bind(settings.caldav_username).bind(settings.caldav_password).bind(settings.caldav_calendar_path)
-        .bind(settings.sync_mode).bind(Utc::now().to_rfc3339())
+        .bind(settings.sync_mode).bind(settings.dedao_enabled).bind(settings.dedao_api_key)
+        .bind(settings.dedao_client_id).bind(settings.dedao_recording_only)
+        .bind(settings.dedao_content_mode).bind(settings.dedao_conflict_mode).bind(Utc::now().to_rfc3339())
         .execute(state.db_manager.pool()).await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -710,6 +763,325 @@ async fn insert_external_meeting_record(
         },
         false,
     ))
+}
+
+const DEDAO_API_BASE: &str = "https://openapi.biji.com/open/api/v1/resource/note";
+
+fn dedao_credentials(settings: &CalendarSettings) -> Result<(String, String), String> {
+    let client_id = settings
+        .dedao_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("Enter the Dedao Brain Client ID first")?;
+    let api_key = settings
+        .dedao_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("Enter the Dedao Brain API Key first")?;
+    if !client_id.starts_with("cli_") || !api_key.starts_with("gk_live_") {
+        return Err(
+            "Invalid Dedao Brain credentials. Check the Client ID and API Key fields.".into(),
+        );
+    }
+    Ok((client_id.to_owned(), api_key.to_owned()))
+}
+
+fn dedao_value_string(value: Option<&serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn dedao_timestamp(value: Option<&serde_json::Value>) -> Option<String> {
+    fn unix_millis(number: i64) -> i64 {
+        if number > 100_000_000_000_000_000 {
+            number / 1_000_000
+        } else if number > 100_000_000_000_000 {
+            number / 1_000
+        } else if number > 10_000_000_000 {
+            number
+        } else {
+            number * 1_000
+        }
+    }
+    let value = value?;
+    if let Some(text) = value.as_str() {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+            return Some(parsed.with_timezone(&Utc).to_rfc3339());
+        }
+        for format in ["%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%z"] {
+            if let Ok(parsed) = DateTime::parse_from_str(text, format) {
+                return Some(parsed.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+        for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+            if let Ok(parsed) = NaiveDateTime::parse_from_str(text, format) {
+                return Local
+                    .from_local_datetime(&parsed)
+                    .single()
+                    .map(|date| date.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+        return text
+            .parse::<i64>()
+            .ok()
+            .and_then(|number| Utc.timestamp_millis_opt(unix_millis(number)).single())
+            .map(|date| date.to_rfc3339());
+    }
+    value
+        .as_i64()
+        .and_then(|number| Utc.timestamp_millis_opt(unix_millis(number)).single())
+        .map(|date| date.to_rfc3339())
+}
+
+fn dedao_note_timestamp(note: &serde_json::Value) -> Option<String> {
+    [
+        "meeting_start_time",
+        "recorded_at",
+        "record_time",
+        "created_at",
+        "create_time",
+    ]
+    .iter()
+    .find_map(|key| dedao_timestamp(note.get(key)))
+    .or_else(|| dedao_timestamp(note.pointer("/audio/created_at")))
+    .or_else(|| dedao_timestamp(note.pointer("/audio/start_time")))
+}
+
+fn dedao_tags(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_owned).or_else(|| {
+                        ["name", "title", "tag_name"].iter().find_map(|key| {
+                            item.get(key)
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                        })
+                    })
+                })
+                .filter(|value| !value.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn dedao_get(
+    settings: &CalendarSettings,
+    path: &str,
+    query: &[(&str, String)],
+) -> Result<serde_json::Value, String> {
+    let (client_id, api_key) = dedao_credentials(settings)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| "Could not initialize the Dedao Brain connection".to_string())?;
+    for attempt in 0..3_u32 {
+        let response = client
+            .get(format!("{}/{}", DEDAO_API_BASE, path))
+            .header("Authorization", &api_key)
+            .header("X-Client-ID", &client_id)
+            .query(query)
+            .send()
+            .await
+            .map_err(|_| {
+                "Could not connect to Dedao Brain. Check the network and try again.".to_string()
+            })?;
+        let status = response.status();
+        let retryable = matches!(status.as_u16(), 429 | 502 | 503 | 504);
+        if retryable && attempt < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(600 * 2_u64.pow(attempt))).await;
+            continue;
+        }
+        let json = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|_| "Dedao Brain returned an unsupported response".to_string())?;
+        let code = json
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if code != 0 || !status.is_success() {
+            return Err(match status.as_u16() {
+                401 => "Dedao Brain authentication failed. Check the credentials and permissions."
+                    .into(),
+                403 => {
+                    "Dedao Brain denied access. Check membership and note read permission.".into()
+                }
+                429 => "Dedao Brain rate limit reached. Try again later.".into(),
+                _ => format!("Dedao Brain request failed (code {}).", code),
+            });
+        }
+        return Ok(json);
+    }
+    Err("Dedao Brain request failed after three attempts".into())
+}
+
+#[tauri::command]
+pub async fn api_list_dedao_notes<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    cursor: Option<String>,
+) -> Result<DedaoNotesPage, String> {
+    let settings = read_settings(state.db_manager.pool()).await?;
+    let query = cursor
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![("cursor", value)])
+        .unwrap_or_default();
+    let json = dedao_get(&settings, "list", &query).await?;
+    let data = json
+        .get("data")
+        .ok_or("Dedao Brain response is missing data")?;
+    let values = data
+        .get("notes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Dedao Brain response is missing the notes list")?;
+    let mut notes = Vec::with_capacity(values.len());
+    for value in values {
+        let note_id = dedao_value_string(value.get("note_id").or_else(|| value.get("id")))
+            .ok_or("Dedao Brain note is missing an ID")?;
+        let imported = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM meetings WHERE source='dedao' AND external_id=?",
+        )
+        .bind(&note_id)
+        .fetch_one(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?
+            > 0;
+        let note_type = value
+            .get("note_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let tags = dedao_tags(value.get("tags"));
+        let preview = value
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(180)
+            .collect();
+        let has_audio = value.get("audio").is_some_and(|audio| !audio.is_null())
+            || ["audio", "voice", "recording"]
+                .iter()
+                .any(|kind| note_type.to_ascii_lowercase().contains(kind))
+            || tags
+                .iter()
+                .any(|tag| tag.contains("录音") || tag.contains("语音") || tag.contains("会议"));
+        notes.push(DedaoNotePreview {
+            note_id,
+            title: value
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("Untitled note")
+                .to_owned(),
+            content_preview: preview,
+            note_type,
+            tags,
+            created_at: dedao_note_timestamp(value),
+            updated_at: dedao_timestamp(value.get("updated_at")),
+            imported,
+            has_audio,
+        });
+    }
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE calendar_settings SET dedao_authorized_at=?,updated_at=? WHERE id='default'",
+    )
+    .bind(&now)
+    .bind(&now)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(DedaoNotesPage {
+        notes,
+        cursor: dedao_value_string(data.get("cursor")),
+        has_more: data
+            .get("has_more")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub async fn api_import_dedao_notes<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    note_ids: Vec<String>,
+    overwrite_existing: Option<bool>,
+) -> Result<DedaoImportResult, String> {
+    if note_ids.is_empty() {
+        return Err("Select notes to import first".into());
+    }
+    let settings = read_settings(state.db_manager.pool()).await?;
+    let mut result = DedaoImportResult {
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    };
+    for note_id in note_ids {
+        let outcome = async {
+            let json = dedao_get(&settings, "detail", &[("id", note_id.clone())]).await?;
+            let note = json
+                .pointer("/data/note")
+                .ok_or("Note detail response is missing note")?;
+            let title = note
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("Untitled note");
+            let cleaned = note
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let raw = note
+                .pointer("/audio/original")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let raw_content = raw
+                .or(cleaned)
+                .ok_or("This note has no importable content")?;
+            let start = dedao_note_timestamp(note).unwrap_or_else(|| Utc::now().to_rfc3339());
+            insert_external_meeting_record(
+                state.db_manager.pool(),
+                title,
+                raw_content,
+                cleaned.or(raw),
+                &start,
+                "dedao",
+                Some(&note_id),
+                overwrite_existing.unwrap_or(false) || settings.dedao_conflict_mode == "overwrite",
+            )
+            .await
+        }
+        .await;
+        match outcome {
+            Ok((_, true)) => result.skipped += 1,
+            Ok((_, false)) => result.imported += 1,
+            Err(error) => {
+                result.failed += 1;
+                log::warn!("Dedao note import failed: {}", error);
+            }
+        }
+    }
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE calendar_settings SET dedao_last_sync_at=?,updated_at=? WHERE id='default'",
+    )
+    .bind(&now)
+    .bind(&now)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1152,30 +1524,39 @@ function run(args) {
   const rangeEnd = Number(args[1]);
   const events = [];
   const calendars = [];
+  let complete = true;
   Calendar.calendars().forEach(calendar => {
-    const name = String(calendar.name());
-    calendars.push({name, color: calendarColor(calendar)});
-    calendar.events().forEach(event => {
-      try {
-        const start = event.startDate();
-        const end = event.endDate();
-        const startMs = start && start.getTime();
-        if (Number.isFinite(startMs) && startMs >= rangeStart && startMs < rangeEnd) {
-          events.push({
-            uid: String(event.uid()),
-            calendar: name,
-            title: String(event.summary() || 'Untitled event'),
-            startMs,
-            endMs: end && Number.isFinite(end.getTime()) ? end.getTime() : null,
-            location: String(event.location() || ''),
-            notes: String(event.description() || ''),
-            allDay: Boolean(event.alldayEvent())
-          });
+    try {
+      const name = String(calendar.name());
+      calendars.push({name, color: calendarColor(calendar)});
+      calendar.events().forEach(event => {
+        try {
+          const start = event.startDate();
+          const end = event.endDate();
+          const startMs = start && start.getTime();
+          if (Number.isFinite(startMs) && startMs >= rangeStart && startMs < rangeEnd) {
+            events.push({
+              uid: String(event.uid()),
+              calendar: name,
+              title: String(event.summary() || 'Untitled event'),
+              startMs,
+              endMs: end && Number.isFinite(end.getTime()) ? end.getTime() : null,
+              location: String(event.location() || ''),
+              notes: String(event.description() || ''),
+              allDay: Boolean(event.alldayEvent())
+            });
+          } else if (!Number.isFinite(startMs)) {
+            complete = false;
+          }
+        } catch (_) {
+          complete = false;
         }
-      } catch (_) {}
-    });
+      });
+    } catch (_) {
+      complete = false;
+    }
   });
-  return JSON.stringify({calendars, events});
+  return JSON.stringify({complete, calendars, events});
 }
 "#;
     let output = tokio::task::spawn_blocking(move || {
@@ -1202,6 +1583,59 @@ function run(args) {
     }
     let native: NativePayload = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid calendar response format: {}", e))?;
+    apply_native_snapshot(pool, native, start, end).await
+}
+
+async fn apply_native_snapshot(
+    pool: &SqlitePool,
+    native: NativePayload,
+    start: &str,
+    end: &str,
+) -> Result<usize, String> {
+    if !native.complete {
+        return Err(
+            "The macOS calendar snapshot was incomplete. CalMee kept the existing calendar cache unchanged."
+                .into(),
+        );
+    }
+    if native.events.iter().any(|event| {
+        event
+            .start_ms
+            .and_then(|value| Utc.timestamp_millis_opt(value).single())
+            .is_none()
+            || event
+                .end_ms
+                .is_some_and(|value| Utc.timestamp_millis_opt(value).single().is_none())
+    }) {
+        return Err(
+            "The macOS calendar snapshot contained an event with an invalid date. CalMee kept the existing calendar cache unchanged."
+                .into(),
+        );
+    }
+    if native.calendars.is_empty() {
+        let cached_calendar_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM calendar_collections WHERE source='local' AND account_key='macOS'",
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        if cached_calendar_count > 0 {
+            return Err(
+                "macOS returned an empty calendar list while CalMee still has local calendars. CalMee retained the existing cache to prevent accidental data loss."
+                    .into(),
+            );
+        }
+    }
+    let seen_calendar_names = native
+        .calendars
+        .iter()
+        .map(|calendar| calendar.name.clone())
+        .collect::<HashSet<_>>();
+    let seen_event_uids = native
+        .events
+        .iter()
+        .map(|event| event.uid.clone())
+        .collect::<HashSet<_>>();
     for calendar in &native.calendars {
         upsert_native_calendar(pool, calendar).await?;
     }
@@ -1240,7 +1674,82 @@ function run(args) {
         .await?;
         imported += 1;
     }
+    reconcile_native_snapshot(pool, start, end, &seen_event_uids, &seen_calendar_names).await?;
     Ok(imported)
+}
+
+async fn reconcile_native_snapshot(
+    pool: &SqlitePool,
+    start: &str,
+    end: &str,
+    seen_event_uids: &HashSet<String>,
+    seen_calendar_names: &HashSet<String>,
+) -> Result<usize, String> {
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let cached_range_events = sqlx::query_as::<_, (String, String)>(
+        "SELECT events.id,events.external_id FROM calendar_events events INNER JOIN calendar_collections calendars ON calendars.id=events.calendar_id WHERE events.source='local' AND calendars.source='local' AND calendars.account_key='macOS' AND datetime(events.start_at)>=datetime(?) AND datetime(events.start_at)<datetime(?)",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut removed = 0usize;
+    for (event_id, external_id) in cached_range_events {
+        if seen_event_uids.contains(&external_id) {
+            continue;
+        }
+        sqlx::query("UPDATE meetings SET calendar_event_id=NULL WHERE calendar_event_id=?")
+            .bind(&event_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+        removed += sqlx::query("DELETE FROM calendar_events WHERE id=?")
+            .bind(&event_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?
+            .rows_affected() as usize;
+    }
+
+    let cached_calendars = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,href FROM calendar_collections WHERE source='local' AND account_key='macOS'",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+    for (calendar_id, calendar_name) in cached_calendars {
+        if seen_calendar_names.contains(&calendar_name) {
+            continue;
+        }
+        let event_ids = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM calendar_events WHERE source='local' AND calendar_id=?",
+        )
+        .bind(&calendar_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+        for event_id in event_ids {
+            sqlx::query("UPDATE meetings SET calendar_event_id=NULL WHERE calendar_event_id=?")
+                .bind(&event_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            removed += sqlx::query("DELETE FROM calendar_events WHERE id=?")
+                .bind(&event_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?
+                .rows_affected() as usize;
+        }
+        sqlx::query("DELETE FROM calendar_collections WHERE id=?")
+            .bind(&calendar_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(removed)
 }
 
 async fn upsert_event(pool: &SqlitePool, event: &CalendarEvent) -> Result<(), String> {
@@ -1287,6 +1796,95 @@ pub async fn api_sync_calendars<R: Runtime>(
 #[cfg(test)]
 mod external_transcript_tests {
     use super::*;
+
+    async fn native_snapshot_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE calendar_collections (id TEXT PRIMARY KEY,source TEXT NOT NULL,account_key TEXT NOT NULL,href TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL,read_only INTEGER NOT NULL,enabled INTEGER NOT NULL,updated_at TEXT NOT NULL,UNIQUE(source,account_key,href))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE calendar_events (id TEXT PRIMARY KEY,source TEXT NOT NULL,external_id TEXT NOT NULL,calendar_name TEXT,title TEXT NOT NULL,start_at TEXT NOT NULL,end_at TEXT,location TEXT,notes TEXT,meeting_id TEXT,updated_at TEXT NOT NULL,calendar_id TEXT,href TEXT,etag TEXT,all_day INTEGER NOT NULL DEFAULT 0,UNIQUE(source,external_id))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY,calendar_event_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    async fn insert_test_calendar(
+        pool: &SqlitePool,
+        id: &str,
+        source: &str,
+        account_key: &str,
+        name: &str,
+    ) {
+        sqlx::query("INSERT INTO calendar_collections (id,source,account_key,href,name,color,read_only,enabled,updated_at) VALUES (?,?,?,?,?,'#123456',1,1,'now')")
+            .bind(id)
+            .bind(source)
+            .bind(account_key)
+            .bind(name)
+            .bind(name)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn insert_test_event(
+        pool: &SqlitePool,
+        id: &str,
+        source: &str,
+        uid: &str,
+        calendar_id: &str,
+        start_at: &str,
+    ) {
+        sqlx::query("INSERT INTO calendar_events (id,source,external_id,title,start_at,updated_at,calendar_id) VALUES (?,?,?,'Event',?,'now',?)")
+            .bind(id)
+            .bind(source)
+            .bind(uid)
+            .bind(start_at)
+            .bind(calendar_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn test_native_event(uid: &str, start_ms: Option<i64>) -> NativeEvent {
+        NativeEvent {
+            uid: uid.into(),
+            calendar: "Current".into(),
+            title: "Event".into(),
+            start_ms,
+            end_ms: None,
+            location: None,
+            notes: None,
+            all_day: false,
+        }
+    }
+
+    async fn native_database_fingerprint(pool: &SqlitePool) -> String {
+        let calendars = sqlx::query_scalar::<_, String>("SELECT id||'|'||source||'|'||account_key||'|'||href||'|'||name||'|'||color||'|'||read_only||'|'||enabled||'|'||updated_at FROM calendar_collections ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let events = sqlx::query_scalar::<_, String>("SELECT id||'|'||source||'|'||external_id||'|'||COALESCE(calendar_name,'')||'|'||title||'|'||start_at||'|'||COALESCE(end_at,'')||'|'||COALESCE(location,'')||'|'||COALESCE(notes,'')||'|'||COALESCE(meeting_id,'')||'|'||updated_at||'|'||COALESCE(calendar_id,'')||'|'||COALESCE(href,'')||'|'||COALESCE(etag,'')||'|'||all_day FROM calendar_events ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let meetings = sqlx::query_scalar::<_, String>(
+            "SELECT id||'|'||COALESCE(calendar_event_id,'') FROM meetings ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        format!("{calendars:?}|{events:?}|{meetings:?}")
+    }
 
     #[test]
     fn native_calendar_payload_accepts_camel_case_dates_all_day_and_color() {
@@ -1341,6 +1939,257 @@ mod external_transcript_tests {
         assert_eq!(stored, ("Local".into(), "#3366CC".into()));
     }
 
+    #[tokio::test]
+    async fn native_snapshot_removes_missing_events_and_deleted_calendars_atomically() {
+        let pool = native_snapshot_pool().await;
+        for (id, name) in [("calendar-a", "Current"), ("calendar-b", "Deleted")] {
+            insert_test_calendar(&pool, id, "local", "macOS", name).await;
+        }
+        insert_test_calendar(&pool, "calendar-caldav", "caldav", "server", "Remote").await;
+        insert_test_calendar(&pool, "calendar-other", "local", "other", "Other local").await;
+        for (id, source, uid, calendar_id, start_at) in [
+            (
+                "event-keep",
+                "local",
+                "uid-keep",
+                "calendar-a",
+                "2026-08-10T08:00:00+00:00",
+            ),
+            (
+                "event-delete",
+                "local",
+                "uid-delete",
+                "calendar-a",
+                "2026-08-11T08:00:00+00:00",
+            ),
+            (
+                "event-overlap",
+                "local",
+                "uid-overlap",
+                "calendar-a",
+                "2026-07-31T23:00:00+00:00",
+            ),
+            (
+                "event-deleted-calendar",
+                "local",
+                "uid-old-calendar",
+                "calendar-b",
+                "2026-09-10T08:00:00+00:00",
+            ),
+            (
+                "event-future",
+                "local",
+                "uid-future",
+                "calendar-a",
+                "2026-09-10T08:00:00+00:00",
+            ),
+            (
+                "event-caldav",
+                "caldav",
+                "uid-caldav",
+                "calendar-caldav",
+                "2026-08-12T08:00:00+00:00",
+            ),
+            (
+                "event-other-local",
+                "local",
+                "uid-other-local",
+                "calendar-other",
+                "2026-08-13T08:00:00+00:00",
+            ),
+        ] {
+            insert_test_event(&pool, id, source, uid, calendar_id, start_at).await;
+        }
+        for (meeting_id, event_id) in [
+            ("meeting-one", "event-delete"),
+            ("meeting-two", "event-deleted-calendar"),
+        ] {
+            sqlx::query("INSERT INTO meetings (id,calendar_event_id) VALUES (?,?)")
+                .bind(meeting_id)
+                .bind(event_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let removed = reconcile_native_snapshot(
+            &pool,
+            "2026-08-01T00:00:00Z",
+            "2026-09-01T00:00:00Z",
+            &HashSet::from(["uid-keep".to_string()]),
+            &HashSet::from(["Current".to_string()]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(removed, 2);
+        let remaining =
+            sqlx::query_scalar::<_, String>("SELECT id FROM calendar_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining,
+            vec![
+                "event-caldav",
+                "event-future",
+                "event-keep",
+                "event-other-local",
+                "event-overlap"
+            ]
+        );
+        let calendars =
+            sqlx::query_scalar::<_, String>("SELECT id FROM calendar_collections ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            calendars,
+            vec!["calendar-a", "calendar-caldav", "calendar-other"]
+        );
+        let linked_meetings = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM meetings WHERE calendar_event_id IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(linked_meetings, 0);
+    }
+
+    #[tokio::test]
+    async fn incomplete_invalid_or_empty_native_snapshots_leave_the_database_unchanged() {
+        let cases = [
+            (
+                "event read exception",
+                NativePayload {
+                    complete: false,
+                    calendars: vec![NativeCalendar {
+                        name: "Current".into(),
+                        color: None,
+                    }],
+                    events: vec![test_native_event("uid-new", Some(1_787_068_800_000))],
+                },
+            ),
+            (
+                "calendar read exception",
+                NativePayload {
+                    complete: false,
+                    calendars: Vec::new(),
+                    events: Vec::new(),
+                },
+            ),
+            (
+                "missing event start",
+                NativePayload {
+                    complete: true,
+                    calendars: vec![NativeCalendar {
+                        name: "Current".into(),
+                        color: None,
+                    }],
+                    events: vec![test_native_event("uid-new", None)],
+                },
+            ),
+            (
+                "invalid event start",
+                NativePayload {
+                    complete: true,
+                    calendars: vec![NativeCalendar {
+                        name: "Current".into(),
+                        color: None,
+                    }],
+                    events: vec![test_native_event("uid-new", Some(i64::MAX))],
+                },
+            ),
+            (
+                "unexpected empty calendar list",
+                NativePayload {
+                    complete: true,
+                    calendars: Vec::new(),
+                    events: Vec::new(),
+                },
+            ),
+        ];
+
+        for (label, payload) in cases {
+            let pool = native_snapshot_pool().await;
+            insert_test_calendar(&pool, "calendar-a", "local", "macOS", "Current").await;
+            insert_test_event(
+                &pool,
+                "event-existing",
+                "local",
+                "uid-existing",
+                "calendar-a",
+                "2026-08-10T08:00:00+00:00",
+            )
+            .await;
+            sqlx::query(
+                "INSERT INTO meetings (id,calendar_event_id) VALUES ('meeting-one','event-existing')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let before = native_database_fingerprint(&pool).await;
+
+            let result = apply_native_snapshot(
+                &pool,
+                payload,
+                "2026-08-01T00:00:00Z",
+                "2026-09-01T00:00:00Z",
+            )
+            .await;
+
+            assert!(result.is_err(), "{label} must reject the snapshot");
+            assert_eq!(
+                native_database_fingerprint(&pool).await,
+                before,
+                "{label} must not upsert, unlink, or delete anything"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_snapshot_reconciliation_rolls_back_unlinks_and_deletes_on_failure() {
+        let pool = native_snapshot_pool().await;
+        insert_test_calendar(&pool, "calendar-a", "local", "macOS", "Current").await;
+        for (id, uid) in [
+            ("event-before-failure", "uid-before-failure"),
+            ("event-fail", "uid-fail"),
+        ] {
+            insert_test_event(
+                &pool,
+                id,
+                "local",
+                uid,
+                "calendar-a",
+                "2026-08-10T08:00:00+00:00",
+            )
+            .await;
+            sqlx::query("INSERT INTO meetings (id,calendar_event_id) VALUES (?,?)")
+                .bind(format!("meeting-{id}"))
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("CREATE TRIGGER fail_native_event_delete BEFORE DELETE ON calendar_events WHEN OLD.id='event-fail' BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = native_database_fingerprint(&pool).await;
+
+        let result = reconcile_native_snapshot(
+            &pool,
+            "2026-08-01T00:00:00Z",
+            "2026-09-01T00:00:00Z",
+            &HashSet::new(),
+            &HashSet::from(["Current".to_string()]),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(native_database_fingerprint(&pool).await, before);
+    }
+
     #[test]
     fn native_calendar_colors_support_float_byte_and_sixteen_bit_ranges() {
         assert_eq!(native_calendar_color(Some(&[1.0, 0.5, 0.0])), "#FF8000");
@@ -1385,5 +2234,46 @@ mod external_transcript_tests {
         assert_eq!(blocks[0].speaker.as_deref(), Some("鲁立"));
         assert_eq!(blocks[0].text, "第一段发言。");
         assert_eq!(blocks[1].text, "第二段发言。");
+    }
+
+    #[test]
+    fn dedao_credentials_require_expected_public_api_prefixes() {
+        let mut settings = CalendarSettings {
+            local_enabled: true,
+            caldav_enabled: false,
+            caldav_url: None,
+            caldav_username: None,
+            caldav_password: None,
+            caldav_calendar_path: None,
+            sync_mode: "manual".into(),
+            dedao_enabled: true,
+            dedao_api_key: Some("gk_live_test".into()),
+            dedao_client_id: Some("cli_test".into()),
+            dedao_recording_only: true,
+            dedao_content_mode: "note".into(),
+            dedao_conflict_mode: "skip".into(),
+            dedao_authorized_at: None,
+            dedao_last_sync_at: None,
+            last_sync_at: None,
+        };
+        assert!(dedao_credentials(&settings).is_ok());
+        settings.dedao_api_key = Some("cli_bad".into());
+        assert!(dedao_credentials(&settings).is_err());
+    }
+
+    #[test]
+    fn dedao_timestamps_accept_seconds_milliseconds_and_rfc3339() {
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!(1_700_000_000))),
+            Some("2023-11-14T22:13:20+00:00".into())
+        );
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!(1_700_000_000_000_i64))),
+            Some("2023-11-14T22:13:20+00:00".into())
+        );
+        assert_eq!(
+            dedao_timestamp(Some(&serde_json::json!("2026-08-25T10:00:00+08:00"))),
+            Some("2026-08-25T02:00:00+00:00".into())
+        );
     }
 }

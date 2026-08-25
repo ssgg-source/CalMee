@@ -74,6 +74,14 @@ impl IncrementalAudioSaver {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn buffered_sample_count(&self) -> usize {
+        self.checkpoint_buffer
+            .iter()
+            .map(|chunk| chunk.data.len())
+            .sum()
+    }
+
     /// Save current buffer as a checkpoint file
     fn save_checkpoint(&mut self) -> Result<()> {
         // Concatenate all chunks in buffer

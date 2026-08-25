@@ -27,7 +27,10 @@ interface MeetingDetailsResponse {
 function MeetingDetailsContent() {
   const { t } = useLanguage();
   const searchParams = useSearchParams();
-  const meetingId = searchParams.get('id');
+  const rawMeetingId = searchParams.get('id');
+  const meetingId = rawMeetingId && rawMeetingId !== 'undefined' && rawMeetingId !== 'null'
+    ? rawMeetingId
+    : null;
   const source = searchParams.get('source'); // Check if navigated from recording
   const { setCurrentMeeting, refetchMeetings } = useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
@@ -195,8 +198,7 @@ function MeetingDetailsContent() {
 
     if (!meetingId || meetingId === 'intro-call') {
       console.warn('No valid meeting ID in URL - meetingId:', meetingId);
-      setError("No meeting selected");
-      setIsLoading(false);
+      router.replace('/');
       Analytics.trackPageView('meeting_details');
       return;
     }
