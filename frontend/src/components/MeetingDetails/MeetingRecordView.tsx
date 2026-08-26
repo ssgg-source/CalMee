@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 type RecordBlock = {
   id: string;
@@ -53,7 +54,7 @@ interface MeetingRecordViewProps {
 }
 
 export const MeetingRecordView = forwardRef<MeetingRecordViewRef, MeetingRecordViewProps>(function MeetingRecordView({ meetingId, onDirtyChange }, ref) {
-  const { t, lt } = useLanguage();
+  const { t, lt, locale } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [markdown, setMarkdown] = useState('');
   const editorRef = useRef<BlockNoteSummaryViewRef>(null);
@@ -66,7 +67,10 @@ export const MeetingRecordView = forwardRef<MeetingRecordViewRef, MeetingRecordV
         const markdown = recordMarkdown(record);
         setMarkdown(markdown);
       })
-      .catch(error => toast.error(t('record.generateFailed'), { description: String(error) }))
+      .catch(error => {
+        reportTechnicalError('meeting-record-generate', error);
+        toast.error(t('record.generateFailed'), { description: toUserFacingError(error, locale).message });
+      })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [meetingId, t]);
@@ -84,7 +88,8 @@ export const MeetingRecordView = forwardRef<MeetingRecordViewRef, MeetingRecordV
           setMarkdown(recordMarkdown(job.preview.record));
           await invoke('api_clear_ai_organize_meeting_record', { meetingId });
         } else if (job.status === 'error' && job.error) {
-          toast.error(t('record.aiFailed'), { description: job.error });
+          reportTechnicalError('meeting-record-job', job.error);
+          toast.error(t('record.aiFailed'), { description: toUserFacingError(job.error, locale).message });
         }
       } catch (error) {
         console.warn('Failed to read meeting-record organizer state:', error);

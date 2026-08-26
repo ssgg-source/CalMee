@@ -246,7 +246,7 @@ export default function RecordingPage() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
-      className="flex flex-col h-screen bg-[#f8f7fb]"
+      className="calmee-page"
     >
       {/* All Modals supported*/}
       <SettingsModals
@@ -264,7 +264,7 @@ export default function RecordingPage() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <header className="flex min-h-[84px] items-center justify-between gap-6 border-b border-violet-100 bg-white px-8 py-3">
+      <header className="calmee-titlebar flex min-h-[76px] items-center justify-between gap-6 px-7 py-2.5">
         <div className="min-w-0 flex-1">
           <input
             value={meetingTitle === '+ New Call' ? '' : meetingTitle}
@@ -278,9 +278,9 @@ export default function RecordingPage() {
             disabled={recordingState.isRecording}
             placeholder={t('recording.new')}
             aria-label={locale === 'zh-CN' ? '会议标题' : 'Meeting title'}
-            className="w-full max-w-xl truncate border-0 bg-transparent p-0 text-2xl font-semibold tracking-tight text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-100"
+            className="w-full max-w-xl truncate border-0 bg-transparent p-0 text-[22px] font-semibold tracking-[-0.015em] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-100"
           />
-          <p className="mt-1 text-[11px] text-slate-400">
+          <p className="mt-1 text-[11px] text-muted-foreground">
             {notesSaved
               ? (locale === 'zh-CN' ? '已自动保存笔记' : 'Notes autosaved')
               : (locale === 'zh-CN' ? '正在保存笔记…' : 'Saving notes…')}
@@ -292,7 +292,7 @@ export default function RecordingPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                className={`h-9 w-9 rounded-full ${linkedEvent ? 'bg-violet-50 text-violet-600' : 'text-slate-500'}`}
+                className={`h-9 w-9 rounded-lg ${linkedEvent ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
                 title={linkedEvent
                   ? `${locale === 'zh-CN' ? '已关联' : 'Linked'}：${linkedEvent.title}`
                   : (locale === 'zh-CN' ? '关联附近的日程' : 'Link a nearby event')}
@@ -340,7 +340,7 @@ export default function RecordingPage() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-full border-0 bg-transparent text-slate-500 shadow-none hover:bg-slate-100 hover:text-slate-700"
+            className="h-9 w-9 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
             disabled={!recordingActive}
             onClick={() => void enterFloatingMode()}
             title={locale === 'zh-CN' ? '切换到悬浮录音' : 'Switch to floating recorder'}
@@ -349,8 +349,8 @@ export default function RecordingPage() {
           </Button>
         </div>
       </header>
-      <div className="relative flex-1 overflow-hidden p-4">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl">
+      <div className="relative flex-1 overflow-hidden bg-card">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1440px]">
           <LiveMeetingNotes
             currentTime={recordingState.activeDuration || 0}
             onSaveStateChange={setNotesSaved}

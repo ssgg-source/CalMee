@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import type { Transcript, TranscriptSegmentData } from "@/types";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { ProductSelect } from "@/components/ui/ProductControls";
 import {
   Popover,
   PopoverContent,
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui/popover";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { ProgressIconButton } from "./ProgressIconButton";
+import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
 
 type Person = { id: string; name: string };
 type SpeakerOverride = { transcriptId: string; personId: string; personName: string };
@@ -658,7 +660,8 @@ export const RawTranscriptView = forwardRef<
       restoreScrollPosition(scrollTop);
       toast.success(zh ? "已单条绑定当前讲话" : "Current speech bound");
     } catch (error) {
-      toast.error(zh ? "单条绑定失败" : "Single binding failed", { description: String(error) });
+      reportTechnicalError("speaker-bind-one", error);
+      toast.error(zh ? "单条绑定失败" : "Single binding failed", { description: toUserFacingError(error, locale).message });
     }
   };
   const bindSpeakerBatch = async (rowId: string) => {
@@ -670,7 +673,8 @@ export const RawTranscriptView = forwardRef<
       restoreScrollPosition(scrollTop);
       toast.success(zh ? "已批量绑定该说话人的全部讲话" : "All speeches from this speaker were bound");
     } catch (error) {
-      toast.error(zh ? "批量绑定失败" : "Batch binding failed", { description: String(error) });
+      reportTechnicalError("speaker-bind-all", error);
+      toast.error(zh ? "批量绑定失败" : "Batch binding failed", { description: toUserFacingError(error, locale).message });
     }
   };
   const recluster = async () => {
@@ -711,8 +715,9 @@ export const RawTranscriptView = forwardRef<
       );
     } catch (reason) {
       if (!String(reason).toLowerCase().includes("cancel"))
+        reportTechnicalError("speaker-recluster", reason);
         toast.error(zh ? "重新聚类失败" : "Speaker reclustering failed", {
-          description: String(reason),
+          description: toUserFacingError(reason, locale).message,
         });
     } finally {
       setReclustering(false);
@@ -996,10 +1001,10 @@ export const RawTranscriptView = forwardRef<
                 {editing === group.id && (
                   <div className="mb-3 ml-9 w-fit max-w-[calc(100%-2.25rem)] overflow-x-auto rounded-lg border border-violet-100 bg-violet-50/50 p-1.5">
                     <div className="flex flex-nowrap items-center gap-1.5">
-                      <select value={bindingPersonId} onChange={event => setBindingPersonId(event.target.value)} className="h-8 w-36 shrink-0 rounded-md border bg-white px-2 text-xs">
+                      <ProductSelect value={bindingPersonId} onChange={event => setBindingPersonId(event.target.value)} className="h-8 w-36 shrink-0">
                         <option value="">{zh ? "选择已有参会人" : "Choose participant"}</option>
                         {people.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
-                      </select>
+                      </ProductSelect>
                       <input
                         value={newName}
                         onChange={event => { setNewName(event.target.value); if (event.target.value) setBindingPersonId(""); }}

@@ -30,6 +30,7 @@ import {
 import { cn, isOllamaNotInstalledError } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 export interface ModelConfig {
   provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'minimax' | 'deepseek' | 'kimi' | 'gemini' | 'qwen' | 'doubao' | 'zhipu' | 'builtin-ai' | 'custom-openai';
@@ -150,7 +151,7 @@ export function ModelSettingsModal({
   layout = 'inline',
   compact = false,
 }: ModelSettingsModalProps) {
-  const { t, lt } = useLanguage();
+  const { t, lt, locale } = useLanguage();
   // Use ConfigContext if available, fallback to props for backward compatibility
   const configContext = useConfig();
   const modelConfig = configContext?.modelConfig || propsModelConfig;
@@ -814,7 +815,8 @@ export function ModelSettingsModal({
       });
       toast.success(result.message || t('model.connected'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      reportTechnicalError('model-settings-action', err);
+      toast.error(toUserFacingError(err, locale).message);
     } finally {
       setIsTestingCloudConnection(false);
     }

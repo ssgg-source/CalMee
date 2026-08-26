@@ -8,6 +8,8 @@ import { FileText, ListTree, Pencil } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { ProductSelect } from '@/components/ui/ProductControls';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -58,7 +60,7 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const [view, setView] = useState<'raw' | 'record'>('raw');
   const [rawVersion,setRawVersion]=useState<'original'|'optimized'>('original');
   const [refinement,setRefinement]=useState<RefinementResult|null>(null);
@@ -90,7 +92,7 @@ export function TranscriptPanel({
   }, [transcripts, usePagination, segments]);
 
   useEffect(() => { setDrafts({});setOptimizedDrafts({});setRawVersion('original');setRefinement(null);if(meetingId)invoke<RefinementResult|null>('api_get_saved_transcript_refinement',{meetingId}).then(setRefinement).catch(()=>{}); }, [meetingId]);
-  useEffect(()=>{if(!meetingId||!refinementRunning)return;let active=true;let timer:number|undefined;const poll=async()=>{try{const job=await invoke<RefinementJob>('api_get_transcript_refinement_status',{meetingId});if(!active)return;setRefinementProgress(job.progress?.percentage||0);if(job.status==='processing'){timer=window.setTimeout(()=>void poll(),1200);}else{setRefinementRunning(false);if(job.status==='completed'&&job.result){setRefinement(job.result);setRawVersion('optimized');}if(job.status==='error')toast.error(t('record.aiFailed'),{description:job.error});}}catch{timer=window.setTimeout(()=>void poll(),1800);}};void poll();return()=>{active=false;if(timer)window.clearTimeout(timer);};},[meetingId,refinementRunning,t]);
+  useEffect(()=>{if(!meetingId||!refinementRunning)return;let active=true;let timer:number|undefined;const poll=async()=>{try{const job=await invoke<RefinementJob>('api_get_transcript_refinement_status',{meetingId});if(!active)return;setRefinementProgress(job.progress?.percentage||0);if(job.status==='processing'){timer=window.setTimeout(()=>void poll(),1200);}else{setRefinementRunning(false);if(job.status==='completed'&&job.result){setRefinement(job.result);setRawVersion('optimized');}if(job.status==='error'){reportTechnicalError('transcript-refinement-job',job.error);toast.error(t('record.aiFailed'),{description:toUserFacingError(job.error,locale).message});}}}catch{timer=window.setTimeout(()=>void poll(),1800);}};void poll();return()=>{active=false;if(timer)window.clearTimeout(timer);};},[meetingId,refinementRunning,t,locale]);
   useEffect(() => {
     if (!meetingId) return;
     let active = true;
@@ -121,7 +123,8 @@ export function TranscriptPanel({
       setEditingSpeaker(null);
       toast.success(t('record.personBound'));
     } catch (error) {
-      toast.error(t('record.personBindFailed'), { description: String(error) });
+      reportTechnicalError('transcript-person-bind', error);
+      toast.error(t('record.personBindFailed'), { description: toUserFacingError(error, locale).message });
     }
   };
 
@@ -134,7 +137,8 @@ export function TranscriptPanel({
       setNewPersonName('');
       await assignSpeaker(transcriptId, person);
     } catch (error) {
-      toast.error(t('record.personCreateFailed'), { description: String(error) });
+      reportTechnicalError('transcript-person-create', error);
+      toast.error(t('record.personCreateFailed'), { description: toUserFacingError(error, locale).message });
     }
   };
 
@@ -148,13 +152,14 @@ export function TranscriptPanel({
       await onRefetchTranscripts?.();
       toast.success(t('meeting.transcriptSaved'));
     } catch (error) {
-      toast.error(t('meeting.transcriptSaveFailed'), { description: String(error) });
+      reportTechnicalError('transcript-save', error);
+      toast.error(t('meeting.transcriptSaveFailed'), { description: toUserFacingError(error, locale).message });
       throw error;
     } finally {
       setSavingRaw(false);
     }
   };
-  const saveOptimizedTranscript=async()=>{if(!meetingId)return;const changes=Object.entries(optimizedDrafts);if(!changes.length)return;setSavingRaw(true);try{await Promise.all(changes.map(([transcriptId,text])=>invoke('api_update_transcript_refinement_text',{meetingId,transcriptId,text})));setRefinement(current=>current?{...current,segments:current.segments.map(item=>optimizedDrafts[item.id]!==undefined?{...item,optimizedText:optimizedDrafts[item.id],proposedText:optimizedDrafts[item.id],safeToApply:true,warnings:[]}:item)}:current);setOptimizedDrafts({});toast.success(t('meeting.transcriptSaved'));}catch(error){toast.error(t('meeting.transcriptSaveFailed'),{description:String(error)});}finally{setSavingRaw(false);}};
+  const saveOptimizedTranscript=async()=>{if(!meetingId)return;const changes=Object.entries(optimizedDrafts);if(!changes.length)return;setSavingRaw(true);try{await Promise.all(changes.map(([transcriptId,text])=>invoke('api_update_transcript_refinement_text',{meetingId,transcriptId,text})));setRefinement(current=>current?{...current,segments:current.segments.map(item=>optimizedDrafts[item.id]!==undefined?{...item,optimizedText:optimizedDrafts[item.id],proposedText:optimizedDrafts[item.id],safeToApply:true,warnings:[]}:item)}:current);setOptimizedDrafts({});toast.success(t('meeting.transcriptSaved'));}catch(error){reportTechnicalError('optimized-transcript-save',error);toast.error(t('meeting.transcriptSaveFailed'),{description:toUserFacingError(error,locale).message});}finally{setSavingRaw(false);}};
 
   const saveActiveDocument = async () => {
     if (view === 'raw') return rawVersion==='optimized'?saveOptimizedTranscript():saveRawTranscript();
@@ -211,7 +216,7 @@ export function TranscriptPanel({
                 {segment.confidence !== undefined && <span className="ml-auto text-[10px] text-slate-300">{Math.round(segment.confidence * 100)}%</span>}
               </div>
               {editingSpeaker===segment.id&&<div className="mb-2 ml-10 flex flex-wrap items-center gap-2 rounded-lg border border-violet-100 bg-violet-50/50 p-2">
-                <select value={speakerByTranscript[segment.id]?.personId||''} onChange={event=>{const person=people.find(item=>item.id===event.target.value);if(person)void assignSpeaker(segment.id,person);}} className="min-w-36 flex-1 rounded-md border border-violet-100 bg-white px-2 py-1.5 text-xs text-slate-700"><option value="">{t('record.selectExistingPerson')}</option>{people.map(person=><option key={person.id} value={person.id}>{person.name}</option>)}</select>
+                <ProductSelect value={speakerByTranscript[segment.id]?.personId||''} onChange={event=>{const person=people.find(item=>item.id===event.target.value);if(person)void assignSpeaker(segment.id,person);}} className="min-w-36 flex-1"><option value="">{t('record.selectExistingPerson')}</option>{people.map(person=><option key={person.id} value={person.id}>{person.name}</option>)}</ProductSelect>
                 <input value={newPersonName} onChange={event=>setNewPersonName(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')void createAndAssignSpeaker(segment.id);}} placeholder={t('record.personPlaceholder')} className="min-w-32 flex-1 rounded-md border border-violet-100 bg-white px-2 py-1.5 text-xs"/>
                 <button disabled={!newPersonName.trim()} onClick={()=>void createAndAssignSpeaker(segment.id)} className="rounded-md bg-violet-600 px-2.5 py-1.5 text-xs text-white disabled:opacity-40">{t('record.createAndLink')}</button>
               </div>}

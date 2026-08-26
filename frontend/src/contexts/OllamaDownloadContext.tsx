@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 /**
  * Ollama download state synchronized with backend
@@ -34,6 +36,7 @@ export const useOllamaDownload = () => {
 };
 
 export function OllamaDownloadProvider({ children }: { children: React.ReactNode }) {
+  const { locale } = useLanguage();
   const [downloadProgress, setDownloadProgress] = useState<Map<string, number>>(new Map());
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
 
@@ -107,7 +110,7 @@ export function OllamaDownloadProvider({ children }: { children: React.ReactNode
             console.error(`❌ [OllamaDownloadContext] Download error for ${modelName}:`, error);
 
             toast.error(`Download failed: ${modelName}`, {
-              description: error,
+              description: toUserFacingError(error, locale).message,
               duration: 6000
             });
 

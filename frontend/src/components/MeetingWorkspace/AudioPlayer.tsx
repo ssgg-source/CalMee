@@ -6,6 +6,9 @@ import { Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from 'luc
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from 'sonner';
+import { ProductSelect } from '@/components/ui/ProductControls';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 export interface AudioPlayerRef { seekTo: (seconds: number) => void; chooseFile: () => Promise<void>; }
 type AudioFileInfo = { path: string; filename: string; duration_seconds: number };
@@ -23,6 +26,8 @@ const time = (seconds: number) => {
 };
 
 export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function AudioPlayer({ meetingId, onPathChange, onTimeChange }, ref) {
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const audioRef = useRef<HTMLAudioElement>(null);
   const [path, setPath] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -50,7 +55,7 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
       const file = await invoke<AudioFileInfo | null>('select_and_validate_audio_command', { meetingId });
       if (!file) return;
       setPlaying(false); setLoading(true); setPath(file.path); onPathChange?.(file.path); setCurrent(0); setDuration(file.duration_seconds || 0);
-    } catch (error) { toast.error('音频载入失败', { description: String(error) }); }
+    } catch (error) { reportTechnicalError('audio-file-load', error); toast.error(zh ? '音频载入失败' : 'Could not load audio', { description: toUserFacingError(error, locale).message }); }
   };
 
   useEffect(() => {
@@ -109,7 +114,8 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
       }
       await audio.play();
     } catch (error) {
-      toast.error('音频无法播放', { description: error instanceof Error ? error.message : String(error) });
+      reportTechnicalError('audio-play', error);
+      toast.error(zh ? '音频无法播放' : 'Could not play audio', { description: toUserFacingError(error, locale).message });
     }
   };
 
@@ -118,7 +124,7 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
     audio.currentTime = Math.max(0, Math.min(seconds, audio.duration || seconds));
     setCurrent(audio.currentTime);
     onTimeChange?.(audio.currentTime);
-    void audio.play().catch(error => toast.error('音频无法播放', { description: String(error) }));
+    void audio.play().catch(error => { reportTechnicalError('audio-seek-play', error); toast.error(zh ? '音频无法播放' : 'Could not play audio', { description: toUserFacingError(error, locale).message }); });
   }, chooseFile: choose }), [path, onTimeChange]);
   const jump = (delta: number) => {
     const audio = audioRef.current; if (!audio) return;
@@ -147,7 +153,7 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
     <span className="w-11 shrink-0 text-right font-mono text-[11px] tabular-nums text-slate-500">{time(current)}</span>
     <input aria-label="播放进度" type="range" min={0} max={duration || 1} step={0.1} value={Math.min(current,duration||0)} disabled={!path} onChange={event=>seek(Number(event.target.value))} className="h-1 min-w-36 flex-1 accent-violet-600" />
     <span className="w-11 shrink-0 font-mono text-[11px] tabular-nums text-slate-500">{time(duration)}</span>
-    <select aria-label="播放速度" value={rate} onChange={event=>{const next=Number(event.target.value);setRate(next);if(audioRef.current)audioRef.current.playbackRate=next;}} className="cursor-pointer appearance-none rounded-md border-0 bg-slate-50 px-2 py-1 text-[11px] text-slate-600 outline-none"><option value={0.75}>0.75×</option><option value={1}>1×</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={2}>2×</option></select>
+    <ProductSelect aria-label="播放速度" value={rate} onChange={event=>{const next=Number(event.target.value);setRate(next);if(audioRef.current)audioRef.current.playbackRate=next;}} className="h-7 w-[62px] cursor-pointer appearance-none border-0 bg-muted/55 px-2 text-[11px] shadow-none"><option value={0.75}>0.75×</option><option value={1}>1×</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={2}>2×</option></ProductSelect>
     <Popover><PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-slate-500" disabled={!path} title={`音量 ${Math.round(volume*100)}%`}>{volume===0?<VolumeX className="h-4 w-4"/>:volume<0.5?<Volume1 className="h-4 w-4"/>:<Volume2 className="h-4 w-4"/>}</Button></PopoverTrigger><PopoverContent align="end" sideOffset={8} className="w-48 p-3"><div className="flex items-center gap-3"><Volume1 className="h-4 w-4 shrink-0 text-slate-400"/><input aria-label="音量" type="range" min={0} max={1} step={0.01} value={volume} onChange={event=>changeVolume(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-violet-600"/><span className="w-8 text-right text-[10px] tabular-nums text-slate-500">{Math.round(volume*100)}</span></div></PopoverContent></Popover>
   </div>;
 });

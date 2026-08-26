@@ -11,6 +11,8 @@ import {
   getModelDisplayName,
   formatFileSize
 } from '../lib/parakeet';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface ParakeetModelManagerProps {
   selectedModel?: string;
@@ -25,6 +27,7 @@ export function ParakeetModelManager({
   className = '',
   autoSave = false
 }: ParakeetModelManagerProps) {
+  const { locale } = useLanguage();
   const [models, setModels] = useState<ParakeetModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +63,7 @@ export function ParakeetModelManager({
         console.error('Failed to initialize Parakeet:', err);
         setError(err instanceof Error ? err.message : 'Failed to load models');
         toast.error('Failed to load transcription models', {
-          description: err instanceof Error ? err.message : 'Unknown error',
+          description: toUserFacingError(err, locale).message,
           duration: 5000
         });
       } finally {
@@ -220,7 +223,7 @@ export function ParakeetModelManager({
     } catch (err) {
       console.error('Failed to cancel download:', err);
       toast.error('Failed to cancel download', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: toUserFacingError(err, locale).message,
         duration: 4000
       });
     }
@@ -305,7 +308,7 @@ export function ParakeetModelManager({
     } catch (err) {
       console.error('Failed to delete model:', err);
       toast.error(`Failed to delete ${displayName}`, {
-        description: err instanceof Error ? err.message : 'Delete failed',
+        description: toUserFacingError(err, locale).message,
         duration: 4000
       });
     }

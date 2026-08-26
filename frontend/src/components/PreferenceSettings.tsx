@@ -9,6 +9,8 @@ import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 import { InterfaceLanguageSettings } from "@/components/InterfaceLanguageSettings"
 import { useLanguage } from "@/contexts/LanguageContext"
+import { SettingsSection } from "@/components/layout/ProductPage"
+import { ProductButton } from "@/components/ui/ProductControls"
 
 export function PreferenceSettings() {
   const { lt } = useLanguage();
@@ -138,96 +140,59 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">{lt('Loading Preferences...')}</div>
+    return <div className="h-28 animate-pulse rounded-xl bg-muted" aria-label={lt('Loading Preferences...')} />
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">{lt('Loading Preferences...')}</div>
+    return <div className="h-28 animate-pulse rounded-xl bg-muted" aria-label={lt('Loading Preferences...')} />
   }
 
   // Ensure we have a boolean value for the Switch component
   const notificationsEnabledValue = notificationsEnabled ?? false;
+  const notificationsLabel = lt('Notifications');
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <InterfaceLanguageSettings />
-      {/* Notifications Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">{lt('Notifications')}</h3>
-            <p className="text-sm text-gray-600">{lt('Enable or disable notifications of start and end of meeting')}</p>
-          </div>
+      <SettingsSection
+        title={notificationsLabel}
+        description={lt('Enable or disable notifications of start and end of meeting')}
+      >
+        <div className="flex items-center justify-between gap-6 border-t border-border/70 pt-4">
+          <span className="text-sm font-medium text-foreground">{notificationsLabel}</span>
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
-      </div>
+      </SettingsSection>
 
-      {/* Data Storage Locations Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">{lt('Data Storage Locations')}</h3>
-        <p className="text-sm text-gray-600 mb-6">
-          {lt('View and access where CalMee stores your data')}
-        </p>
-
-        <div className="space-y-4">
-          {/* Database Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.database || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('database')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Models Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.models || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('models')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Recordings Location */}
-          <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">{lt('Meeting Recordings')}</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
+      <SettingsSection
+        title={lt('Data Storage Locations')}
+        description={lt('View and access where CalMee stores your data')}
+      >
+          <div className="rounded-lg border border-border/70 bg-muted/35 p-4">
+            <div className="mb-2 text-sm font-medium text-foreground">{lt('Meeting Recordings')}</div>
+            <div className="mb-3 break-all font-mono text-xs text-muted-foreground">
               {storageLocations?.recordings || lt('Loading...')}
             </div>
-            <button
+            <ProductButton
+              size="sm"
               onClick={() => handleOpenFolder('recordings')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
               {lt('Open Folder')}
-            </button>
+            </ProductButton>
           </div>
-        </div>
 
-        <div className="mt-4 p-3 bg-blue-50 rounded-md">
-          <p className="text-xs text-blue-800">
+        <div className="mt-4 rounded-lg bg-muted/60 px-3 py-2.5">
+          <p className="text-xs leading-5 text-muted-foreground">
             <strong>{lt('Note:')}</strong> {lt('Database and models are stored together in your application data directory for unified management.')}
           </p>
         </div>
-      </div>
+      </SettingsSection>
 
-      {/* Analytics Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <SettingsSection>
         <AnalyticsConsentSwitch />
-      </div>
+      </SettingsSection>
     </div>
   )
 }

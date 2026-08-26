@@ -16,6 +16,7 @@ import {
 import { openMeetingWorkspace } from '@/lib/meeting-window';
 import { persistLiveMeetingNotes } from '@/lib/live-meeting-notes';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
@@ -446,7 +447,7 @@ export function useRecordingStop(
           console.error('Failed to save meeting to database:', saveError);
           setStatus(RecordingStatus.ERROR, saveError instanceof Error ? saveError.message : 'Unknown error');
           toast.error(zh ? '保存会议失败' : 'Failed to save meeting', {
-            description: saveError instanceof Error ? saveError.message : (zh ? '未知错误' : 'Unknown error')
+            description: toUserFacingError(saveError, locale).message
           });
           throw saveError;
         }

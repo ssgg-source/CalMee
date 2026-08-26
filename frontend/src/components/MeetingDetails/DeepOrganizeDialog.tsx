@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useConfig } from '@/contexts/ConfigContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import type { ModelConfig } from '@/components/ModelSettingsModal';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 const PROVIDERS: Array<{ value: ModelConfig['provider']; label: string }> = [
   { value: 'minimax', label: 'MiniMax' },
@@ -55,7 +56,7 @@ export function DeepOrganizeDialog({
   mode = 'smart', contextKey = '', speakerKeys = [], speakerNames = [],
 }: DeepOrganizeDialogProps) {
   const { modelConfig, modelOptions } = useConfig();
-  const { lt } = useLanguage();
+  const { lt, locale } = useLanguage();
   const modelListId = useId();
   const [language, setLanguage] = useState('auto');
   const [provider, setProvider] = useState<ModelConfig['provider']>(modelConfig.provider);
@@ -110,7 +111,8 @@ export function DeepOrganizeDialog({
         description: lt('You can switch pages while CalMee continues processing.'),
       });
     } catch (error) {
-      toast.error(mode === 'speech' ? lt('Speech summary failed') : lt('AI deep organization failed'), { description: String(error) });
+      reportTechnicalError('deep-organize-start', error);
+      toast.error(mode === 'speech' ? lt('Speech summary failed') : lt('AI deep organization failed'), { description: toUserFacingError(error, locale).message });
     } finally {
       setStarting(false);
     }

@@ -13,6 +13,7 @@ import {
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -694,7 +695,7 @@ export function useSummaryGeneration({
       } catch (error) {
         console.error('Error validating built-in AI model:', error);
         toast.error('Failed to validate built-in AI model', {
-          description: error instanceof Error ? error.message : String(error),
+          description: toUserFacingError(error, locale).message,
           duration: 5000,
         });
         return;

@@ -2,10 +2,12 @@
 
 import { useEffect } from "react";
 import type { PartialBlock, Block } from "@blocknote/core";
+import { en, zh } from "@blocknote/core/locales";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import "@blocknote/core/fonts/inter.css";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 interface EditorProps {
   initialContent?: Block[];
@@ -14,26 +16,19 @@ interface EditorProps {
 }
 
 export default function Editor({ initialContent, onChange, editable = true }: EditorProps) {
-  console.log('📝 EDITOR: Initializing BlockNote editor with blocks:', {
-    hasContent: !!initialContent,
-    blocksCount: initialContent?.length || 0,
-    editable
-  });
+  const { locale } = useLanguage();
 
   const editor = useCreateBlockNote({
     initialContent: initialContent as PartialBlock[] | undefined,
-  });
-
-  console.log('📝 EDITOR: BlockNote editor created successfully');
+    dictionary: locale === "zh-CN" ? zh : en,
+    heading: { levels: [1, 2, 3, 4] },
+  }, [locale]);
 
   // Handle content changes
   useEffect(() => {
     if (!onChange) return;
 
     const handleChange = () => {
-      console.log('📝 EDITOR: Content changed, notifying parent...', {
-        blocksCount: editor.document.length
-      });
       onChange(editor.document);
     };
 
@@ -41,11 +36,10 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
 
     return () => {
       if (typeof unsubscribe === 'function') {
-        console.log('📝 EDITOR: Cleaning up onChange listener');
         unsubscribe();
       }
     };
   }, [editor, onChange]);
 
-  return <BlockNoteView editor={editor} editable={editable} theme="light" />;
+  return <div className="calmee-blocknote-editor calmee-blocknote-editor--summary calmee-editor-canvas"><BlockNoteView editor={editor} editable={editable} theme="light" /></div>;
 }

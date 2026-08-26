@@ -24,6 +24,7 @@ import { useState, useEffect, useRef, ReactNode } from 'react';
 import { isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface SummaryGeneratorButtonGroupProps {
   languageSlot?: ReactNode;
@@ -60,7 +61,7 @@ export function SummaryGeneratorButtonGroup({
   onOpenModelSettings,
   languageSlot
 }: SummaryGeneratorButtonGroupProps) {
-  const { lt } = useLanguage();
+  const { lt, locale } = useLanguage();
   const [isCheckingModels, setIsCheckingModels] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
@@ -174,7 +175,7 @@ export function SummaryGeneratorButtonGroup({
     } catch (error) {
       console.error('Error checking built-in AI models:', error);
       toast.error(lt('Failed to check model status'), {
-        description: error instanceof Error ? error.message : String(error),
+        description: toUserFacingError(error, locale).message,
         duration: 5000,
       });
     } finally {

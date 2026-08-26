@@ -27,6 +27,8 @@ import { useRouter } from 'next/navigation';
 import { openMeetingWorkspace } from '@/lib/meeting-window';
 import { useSidebar } from '../Sidebar/SidebarProvider';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { getAudioFormatsDisplayList } from '@/constants/audioFormats';
 
 
 interface ImportAudioDialogProps {
@@ -134,8 +136,11 @@ export function ImportAudioDialog({
 
   const handleImportError = useCallback((error: string) => {
     toast.dismiss(BACKGROUND_IMPORT_TOAST_ID);
-    toast.error(zh ? '录音导入失败' : 'Recording import failed', { description: error });
-  }, [zh]);
+    reportTechnicalError('ImportAudioDialog', error);
+    toast.error(zh ? '录音导入失败' : 'Recording import failed', {
+      description: toUserFacingError(error, locale).message,
+    });
+  }, [locale, zh]);
 
   const {
     status,
@@ -263,22 +268,22 @@ export function ImportAudioDialog({
           <DialogTitle className="flex items-center gap-2">
             {isProcessing ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 {zh ? '正在导入录音…' : 'Importing recording…'}
               </>
             ) : error ? (
               <>
-                <AlertCircle className="h-5 w-5 text-red-600" />
+                <AlertCircle className="h-5 w-5 text-destructive" />
                 {zh ? '导入失败' : 'Import failed'}
               </>
             ) : status === 'complete' ? (
               <>
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
                 {zh ? '导入完成' : 'Import complete'}
               </>
             ) : (
               <>
-                <Upload className="h-5 w-5 text-blue-600" />
+                <Upload className="h-5 w-5 text-primary" />
                 {zh ? '导入录音文件' : 'Import audio file'}
               </>
             )}
@@ -297,12 +302,12 @@ export function ImportAudioDialog({
           {!isProcessing && !error && (
             <>
               {fileInfo ? (
-                <div className="min-w-0 space-y-3 overflow-hidden rounded-lg bg-gray-50 p-4">
+                <div className="min-w-0 space-y-3 overflow-hidden rounded-xl border border-border/70 bg-muted/35 p-4">
                   <div className="flex min-w-0 items-start gap-3">
-                    <FileAudio className="h-8 w-8 text-blue-600 flex-shrink-0" />
+                    <FileAudio className="h-8 w-8 text-primary flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="block max-w-full truncate font-medium text-gray-900" title={fileInfo.filename}>{fileInfo.filename}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
+                      <p className="block max-w-full truncate font-medium text-foreground" title={fileInfo.filename}>{fileInfo.filename}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Clock className="h-3.5 w-3.5" />
                           {formatDuration(fileInfo.duration_seconds)}
@@ -311,9 +316,9 @@ export function ImportAudioDialog({
                           <HardDrive className="h-3.5 w-3.5" />
                           {formatFileSize(fileInfo.size_bytes)}
                         </span>
-                        <span className="text-blue-600 font-medium">{fileInfo.format}</span>
+                        <span className="font-medium text-primary">{fileInfo.format}</span>
                         {(preselectedRecordedAt || fileInfo.recorded_at) && (
-                          <span className="basis-full text-xs text-slate-400">
+                          <span className="basis-full text-xs text-muted-foreground">
                             {zh ? '录音时间：' : 'Recorded: '}
                             {new Date(preselectedRecordedAt || fileInfo.recorded_at!).toLocaleString(zh ? 'zh-CN' : 'en-US')}
                           </span>
@@ -324,7 +329,7 @@ export function ImportAudioDialog({
 
                   {/* Editable title */}
                   <div className="space-y-1">
-                    <label className="text-sm font-medium text-gray-700">{zh ? '会议名称' : 'Meeting title'}</label>
+                    <label className="text-sm font-medium text-foreground">{zh ? '会议名称' : 'Meeting title'}</label>
                     <Input
                       value={title}
                       className="min-w-0"
@@ -341,8 +346,8 @@ export function ImportAudioDialog({
                   </Button>
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                  <FileAudio className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <div className="rounded-xl border border-dashed border-border bg-muted/25 p-8 text-center">
+                  <FileAudio className="mx-auto mb-4 h-12 w-12 text-primary/70" />
                   <Button onClick={handleSelectFile} disabled={status === 'validating'}>
                     {status === 'validating' ? (
                       <>
@@ -356,12 +361,12 @@ export function ImportAudioDialog({
                       </>
                     )}
                   </Button>
-                  <p className="text-sm text-gray-500 mt-2">MP4, WAV, MP3, FLAC, OGG, MKV, WebM, WMA</p>
+                  <p className="mt-2 text-sm text-muted-foreground">{getAudioFormatsDisplayList()}</p>
                 </div>
               )}
 
               {fileInfo && (
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="overflow-hidden rounded-xl border border-border/70 bg-card">
                   <label className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
                     <span>{zh ? '转文字稿' : 'Transcribe audio'}</span>
                     <Switch checked={transcribeAfterImport} onCheckedChange={(checked) => {
@@ -369,11 +374,11 @@ export function ImportAudioDialog({
                       if (!checked) { setRefineAfterImport(false); setSmartRecordAfterImport(false); }
                     }} />
                   </label>
-                  <label className={`flex items-center justify-between gap-4 border-t border-slate-100 px-4 py-3 text-sm ${transcribeAfterImport ? '' : 'text-slate-400'}`}>
+                  <label className={`flex items-center justify-between gap-4 border-t border-border/60 px-4 py-3 text-sm ${transcribeAfterImport ? '' : 'text-muted-foreground'}`}>
                     <span>{zh ? 'AI 优化文字稿' : 'Optimize transcript with AI'}</span>
                     <Switch checked={refineAfterImport} disabled={!transcribeAfterImport} onCheckedChange={setRefineAfterImport} />
                   </label>
-                  <label className={`flex items-center justify-between gap-4 border-t border-slate-100 px-4 py-3 text-sm ${transcribeAfterImport ? '' : 'text-slate-400'}`}>
+                  <label className={`flex items-center justify-between gap-4 border-t border-border/60 px-4 py-3 text-sm ${transcribeAfterImport ? '' : 'text-muted-foreground'}`}>
                     <span>{zh ? '生成智能记录' : 'Generate smart record'}</span>
                     <Switch checked={smartRecordAfterImport} disabled={!transcribeAfterImport} onCheckedChange={setSmartRecordAfterImport} />
                   </label>
@@ -386,13 +391,13 @@ export function ImportAudioDialog({
           {isProcessing && progress && (
             <div className="space-y-2">
               <div className="relative">
-                <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
-                    className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                    className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
                     style={{ width: `${Math.min(progress.progress_percentage, 100)}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-gray-600 mt-1">
+                <div className="mt-1 flex justify-between text-xs text-muted-foreground">
                   <span>{importProgressMessage(progress.stage)}</span>
                   <span>{Math.round(progress.progress_percentage)}%</span>
                 </div>
@@ -403,8 +408,8 @@ export function ImportAudioDialog({
 
           {/* Error display */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="break-words text-sm text-red-800 [overflow-wrap:anywhere]">{error}</p>
+            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-3">
+              <p className="break-words text-sm text-destructive [overflow-wrap:anywhere]">{toUserFacingError(error, locale).message}</p>
             </div>
           )}
         </div>
@@ -417,7 +422,6 @@ export function ImportAudioDialog({
               </Button>
               <Button
                 onClick={handleStartImport}
-                className="bg-blue-600 hover:bg-blue-700"
                 disabled={!fileInfo}
               >
                 <Upload className="h-4 w-4 mr-2" />
@@ -431,7 +435,7 @@ export function ImportAudioDialog({
                 <Minimize2 className="h-4 w-4 mr-2" />
                 {t('import.runBackground')}
               </Button>
-              <Button variant="outline" onClick={handleCancel} className="text-red-600 hover:text-red-700">
+              <Button variant="outline" onClick={handleCancel} className="text-destructive hover:text-destructive">
                 <X className="h-4 w-4 mr-2" />
                 {t('import.cancelTask')}
               </Button>

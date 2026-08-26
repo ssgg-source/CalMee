@@ -4,6 +4,9 @@ import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { TranscriptProvider } from './TranscriptSettings';
+import { ProductSelect } from '@/components/ui/ProductControls';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 export interface Language {
   code: string;
@@ -128,6 +131,8 @@ export function LanguageSelection({
   disabled = false,
   provider = 'localWhisper'
 }: LanguageSelectionProps) {
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const [saving, setSaving] = useState(false);
   const { setSelectedLanguage } = useConfig();
 
@@ -143,7 +148,6 @@ export function LanguageSelection({
       // Save language preference to localStorage and sync to backend
       setSelectedLanguage(languageCode);
       onLanguageChange(languageCode);
-      console.log('Language preference saved:', languageCode);
 
       // Track language selection analytics
       const selectedLang = LANGUAGES.find(lang => lang.code === languageCode);
@@ -156,13 +160,13 @@ export function LanguageSelection({
 
       // Show success toast
       const languageName = selectedLang?.name || languageCode;
-      toast.success("Language preference saved", {
-        description: `Transcription language set to ${languageName}`
+      toast.success(zh ? '转写语言已保存' : 'Language preference saved', {
+        description: zh ? `转写语言已设为 ${languageName}` : `Transcription language set to ${languageName}`
       });
     } catch (error) {
-      console.error('Failed to save language preference:', error);
-      toast.error("Failed to save language preference", {
-        description: error instanceof Error ? error.message : String(error)
+      reportTechnicalError('transcription-language-save', error);
+      toast.error(zh ? '转写语言保存失败' : 'Failed to save language preference', {
+        description: toUserFacingError(error, locale).message
       });
     } finally {
       setSaving(false);
@@ -184,11 +188,11 @@ export function LanguageSelection({
       </div>
 
       <div className="space-y-2">
-        <select
+        <ProductSelect
           value={selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={disabled || saving}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+          className="w-full"
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
@@ -196,7 +200,7 @@ export function LanguageSelection({
               {language.code !== 'auto' && language.code !== 'auto-translate' && ` (${language.code})`}
             </option>
           ))}
-        </select>
+        </ProductSelect>
 
         {/* Parakeet language limitation warning */}
         {isParakeet && (

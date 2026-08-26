@@ -4,6 +4,8 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface UseMeetingDataProps {
   meeting: any;
@@ -12,6 +14,7 @@ interface UseMeetingDataProps {
 }
 
 export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMeetingDataProps) {
+  const { locale } = useLanguage();
   // State
   // Use prop directly since summary generation fetches transcripts independently
   const transcripts = meeting.transcripts;
@@ -134,8 +137,8 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
       toast.success("Changes saved successfully");
     } catch (error) {
-      console.error('Failed to save changes:', error);
-      toast.error("Failed to save changes", { description: String(error) });
+      reportTechnicalError('meeting-save', error);
+      toast.error(locale === 'zh-CN' ? '保存失败' : 'Failed to save changes', { description: toUserFacingError(error, locale).message });
     } finally {
       setIsSaving(false);
     }
