@@ -20,8 +20,8 @@ const count = pattern => source.match(pattern)?.length ?? 0;
 // This is a ratchet, not a claim that migration is complete. Lower each
 // threshold as another product area moves onto the shared feedback helper.
 const checks = [
-  { name: 'raw errors placed directly in UI descriptions', count: count(/description\s*:\s*(?:String\s*\(|error\s+instanceof\s+Error|payload\.error|job\.error|err\.message)/g), limit: 46 },
-  { name: 'browser alert calls', count: count(/\balert\s*\(/g), limit: 4 },
+  { name: 'raw errors placed directly in UI descriptions', count: count(/description\s*:\s*(?:String\s*\(|error\s+instanceof\s+Error|payload\.error|job\.error|err\.message)/g), limit: 0 },
+  { name: 'browser alert calls', count: count(/\balert\s*\(/g), limit: 0 },
   { name: 'legacy literal translations', count: count(/\blt\s*\(/g), limit: 317 },
 ];
 

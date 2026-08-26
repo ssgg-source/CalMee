@@ -445,7 +445,8 @@ export function MeetingWorkspaceShell({
         });
       } else if (job.status === "error") {
         setOrganizeProgress(null);
-        toast.error("AI 整理失败", { description: job.error });
+        reportTechnicalError("meeting-organize-job", job.error);
+        toast.error(zh ? "AI 整理失败" : "AI organization failed", { description: toUserFacingError(job.error, locale).message });
       } else if (job.status === "cancelled") {
         setOrganizeProgress(null);
         setOrganizeMessage("");
@@ -493,7 +494,8 @@ export function MeetingWorkspaceShell({
       } else if (job.status === "error") {
         setSpeechProgress(null);
         setSpeechMessage("");
-        toast.error(zh ? "讲话总结生成失败" : "Speech summary failed", { description: job.error });
+        reportTechnicalError("speech-summary-job", job.error);
+        toast.error(zh ? "讲话总结生成失败" : "Speech summary failed", { description: toUserFacingError(job.error, locale).message });
       } else if (job.status === "cancelled") {
         setSpeechProgress(null);
         setSpeechMessage("");
@@ -656,7 +658,7 @@ export function MeetingWorkspaceShell({
           setRefinementProgress(null);
           toast.error(
             zh ? "AI 文字稿优化失败" : "AI transcript optimization failed",
-            { description: job.error },
+            { description: toUserFacingError(job.error, locale).message },
           );
         } else if (job.status === "cancelled") {
           setRefinementProgress(null);
@@ -915,8 +917,8 @@ export function MeetingWorkspaceShell({
   };
 
   return (
-    <div className="calmee-meeting-workspace flex h-screen flex-col bg-[#f7f7fb]">
-      <header className="shrink-0 bg-white px-7 py-4">
+    <div className="calmee-meeting-workspace calmee-page">
+      <header className="calmee-titlebar shrink-0 px-7 py-3">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             {editingTitle ? (
@@ -938,12 +940,12 @@ export function MeetingWorkspaceShell({
                     setEditingTitle(false);
                   }
                 }}
-                className="w-full max-w-3xl border-0 bg-transparent p-0 text-[20px] font-semibold leading-7 text-slate-900 outline-none"
+                className="w-full max-w-3xl border-0 bg-transparent p-0 text-[20px] font-semibold leading-7 text-foreground outline-none"
               />
             ) : (
               <button
                 onClick={() => setEditingTitle(true)}
-                className="max-w-3xl truncate text-left text-[20px] font-semibold leading-7 text-slate-900 hover:text-violet-700"
+                className="max-w-3xl truncate text-left text-[20px] font-semibold leading-7 text-foreground hover:text-primary"
                 title="点击修改会议名称"
               >
                 {title}
@@ -1023,8 +1025,8 @@ export function MeetingWorkspaceShell({
           </div>
         </div>
       </header>
-      <main className="flex min-h-0 flex-1 flex-col p-4">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-violet-100 bg-white shadow-sm">
+      <main className="flex min-h-0 flex-1 flex-col bg-card">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
           <div className="grid min-h-[68px] shrink-0 grid-cols-[180px_minmax(320px,1fr)_180px] items-center gap-4 px-5">
             <div className="justify-self-start">
               <ButtonGroup>
@@ -1257,8 +1259,8 @@ export function MeetingWorkspaceShell({
               </ButtonGroup>
             </div>
           </div>
-          <div className="shrink-0 px-5 pb-2">
-            <div className="grid grid-cols-4 rounded-xl bg-violet-50/80 p-1">
+          <div className="shrink-0 border-b border-border/70 px-5">
+            <div className="grid grid-cols-4">
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 const backgroundProgress =
@@ -1292,7 +1294,7 @@ export function MeetingWorkspaceShell({
                     key={tab.id}
                     onClick={() => setActive(tab.id)}
                     title={backgroundProgress != null ? progressTitle : undefined}
-                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] leading-5 transition ${active === tab.id ? "bg-white font-medium text-violet-700 shadow-sm" : "text-slate-500 hover:text-violet-600"}`}
+                    className={`flex items-center justify-center gap-2 border-b-2 px-3 py-2.5 text-[13px] leading-5 transition ${active === tab.id ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                   >
                     {backgroundProgress != null ? (
                       <DocumentTabProgress

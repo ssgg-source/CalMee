@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSidebar } from './SidebarProvider';
 import { openMeetingWorkspace } from '@/lib/meeting-window';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 const mainItems = [
   { href: '/', labelKey: 'nav.home', icon: LayoutDashboard },
@@ -35,7 +36,7 @@ const footerItems = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { refetchMeetings } = useSidebar();
   const [creatingMeeting, setCreatingMeeting] = useState(false);
   const isActive = (href: string) => {
@@ -62,7 +63,8 @@ export default function Sidebar() {
         title: t('meeting.untitled'),
       });
     } catch (error) {
-      toast.error(t('meeting.createFailed'), { description: String(error) });
+      reportTechnicalError('meeting-create', error);
+      toast.error(t('meeting.createFailed'), { description: toUserFacingError(error, locale).message });
     } finally {
       setCreatingMeeting(false);
     }

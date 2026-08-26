@@ -26,9 +26,9 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
         }}
       >
         <div className="w-2/3 max-w-[750px] flex justify-center">
-          <div className="bg-white rounded-lg shadow-lg px-4 py-2 flex items-center space-x-2">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
-            <span className="text-sm text-gray-700">{message}</span>
+          <div className="flex items-center gap-2.5 rounded-xl border border-border/80 bg-card/95 px-4 py-2.5 text-card-foreground shadow-[0_14px_36px_hsl(var(--foreground)/0.13)] backdrop-blur-xl">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-[13px] font-medium">{message}</span>
           </div>
         </div>
       </div>
@@ -42,21 +42,24 @@ export function StatusOverlays({
   isSaving,
   sidebarCollapsed
 }: StatusOverlaysProps) {
+  const { locale }=useLanguage();const zh=locale==='zh-CN';
   return (
     <>
       {/* Processing status overlay - shown after recording stops while finalizing transcription */}
       <StatusOverlay
         show={isProcessing}
-        message="Finalizing transcription..."
+        message={zh?'正在完成录音处理…':'Finalizing the recording…'}
         sidebarCollapsed={sidebarCollapsed}
       />
 
       {/* Saving status overlay - shown while saving transcript to database */}
       <StatusOverlay
         show={isSaving}
-        message="Saving transcript..."
+        message={zh?'正在保存会议内容…':'Saving meeting content…'}
         sidebarCollapsed={sidebarCollapsed}
       />
     </>
   );
 }
+import { Loader2 } from 'lucide-react';
+import { useLanguage } from '@/contexts/LanguageContext';

@@ -25,6 +25,7 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { MeetingTabs } from '@/components/MeetingTabs'
 import { LanguageProvider, useLanguage } from '@/contexts/LanguageContext'
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback'
 import { usePathname } from 'next/navigation'
 import { appCacheDir, join } from '@tauri-apps/api/path'
 import { mkdir, writeFile } from '@tauri-apps/plugin-fs'
@@ -106,7 +107,7 @@ function AppFrame({ children }: { children: React.ReactNode }) {
 }
 
 function DatabaseStartupScreen({ status, detailed }: { status: DatabaseStartupStatus | null; detailed: boolean }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   if (!detailed && status?.status !== 'failed') {
     return <main className="h-screen bg-[#f8f7fb]" aria-label={t('startup.opening')} />;
   }
@@ -335,7 +336,7 @@ export default function RootLayout({
       } catch (error) {
         console.error('[Layout] Failed to receive dropped audio item:', error);
         toast.error('Failed to import the dropped recording', {
-          description: error instanceof Error ? error.message : String(error)
+          description: toUserFacingError(error, 'zh-CN').message
         });
       }
     };

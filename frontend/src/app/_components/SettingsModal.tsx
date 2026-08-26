@@ -1,338 +1,153 @@
+import { AlertCircle, TriangleAlert } from "lucide-react";
 import { ModelConfig } from "@/components/ModelSettingsModal";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { DeviceSelection } from "@/components/DeviceSelection";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { TranscriptSettings } from "@/components/TranscriptSettings";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ProductButton, ProductSelect } from "@/components/ui/ProductControls";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 
-type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
-
-/**
- * SettingsModals Component
- *
- * All settings modals consolidated into a single component.
- * Uses ConfigContext and RecordingStateContext internally - no prop drilling needed!
- */
+type ModalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
 
 interface SettingsModalsProps {
-  modals: {
-    modelSettings: boolean;
-    deviceSettings: boolean;
-    languageSettings: boolean;
-    modelSelector: boolean;
-    errorAlert: boolean;
-    chunkDropWarning: boolean;
-  };
-  messages: {
-    errorAlert: string;
-    chunkDropWarning: string;
-    modelSelector: string;
-  };
-  onClose: (name: modalType) => void;
+  modals: Record<ModalType, boolean>;
+  messages: { errorAlert: string; chunkDropWarning: string; modelSelector: string };
+  onClose: (name: ModalType) => void;
 }
 
-export function SettingsModals({
-  modals,
-  messages,
-  onClose,
-}: SettingsModalsProps) {
-  // Contexts
+export function SettingsModals({ modals, messages, onClose }: SettingsModalsProps) {
   const {
-    modelConfig,
-    setModelConfig,
-    models,
-    modelOptions,
-    error,
-    selectedDevices,
-    setSelectedDevices,
-    selectedLanguage,
-    setSelectedLanguage,
-    transcriptModelConfig,
-    setTranscriptModelConfig,
-    showConfidenceIndicator,
+    modelConfig, setModelConfig, models, modelOptions, error,
+    selectedDevices, setSelectedDevices, selectedLanguage, setSelectedLanguage,
+    transcriptModelConfig, setTranscriptModelConfig, showConfidenceIndicator,
     toggleConfidenceIndicator,
   } = useConfig();
-
   const { isRecording } = useRecordingState();
+  const { locale } = useLanguage();
+  const zh = locale === "zh-CN";
 
-  return <>
-    {/* Legacy Settings Modal */}
-    {modals.modelSettings && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-          {/* Header */}
-          <div className="flex justify-between items-center p-6 border-b">
-            <h3 className="text-xl font-semibold text-gray-900">Preferences</h3>
-            <button
-              onClick={() => onClose("modelSettings")
-              }
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Content - Scrollable */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-8">
-            {/* General Preferences Section */}
+  return (
+    <>
+      <Dialog open={modals.modelSettings} onOpenChange={(open) => !open && onClose("modelSettings")}>
+        <DialogContent className="flex max-h-[88vh] max-w-4xl flex-col overflow-hidden p-0">
+          <DialogHeader className="border-b border-border/70 px-6 pb-4 pt-5">
+            <DialogTitle>{zh ? "偏好设置" : "Preferences"}</DialogTitle>
+            <DialogDescription>{zh ? "管理常用偏好与 AI 总结模型。" : "Manage general preferences and the AI summary model."}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-6 py-5">
             <PreferenceSettings />
-
-            {/* Divider */}
-            <div className="border-t pt-8">
-              <h4 className="text-lg font-semibold text-gray-900 mb-4">AI Model Configuration</h4>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Summarization Model
-                  </label>
-                  <div className="flex space-x-2">
-                    <select
-                      className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                      value={modelConfig.provider}
-                      onChange={(e) => {
-                        const provider = e.target.value as ModelConfig['provider'];
-                        setModelConfig({
-                          ...modelConfig,
-                          provider,
-                          model: modelOptions[provider][0]
-                        });
-                      }}
-                    >
-                      <option value="builtin-ai">Built-in AI</option>
-                      <option value="claude">Claude</option>
-                      <option value="groq">Groq</option>
-                      <option value="ollama">Ollama</option>
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="openai">OpenAI</option>
-                    </select>
-
-                    <select
-                      className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                      value={modelConfig.model}
-                      onChange={(e) => setModelConfig((prev: ModelConfig) => ({ ...prev, model: e.target.value }))}
-                    >
-                      {modelOptions[modelConfig.provider].map((model: string) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
+            <section className="border-t border-border/70 pt-6">
+              <h3 className="text-sm font-semibold text-foreground">{zh ? "AI 模型配置" : "AI model configuration"}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">{zh ? "选择用于生成智能记录的服务和模型。" : "Choose the provider and model used for smart records."}</p>
+              <div className="mt-4 grid grid-cols-[minmax(130px,0.4fr)_minmax(180px,1fr)] gap-2">
+                <ProductSelect
+                  value={modelConfig.provider}
+                  onChange={(event) => {
+                    const provider = event.target.value as ModelConfig["provider"];
+                    setModelConfig({ ...modelConfig, provider, model: modelOptions[provider][0] });
+                  }}
+                >
+                  <option value="builtin-ai">{zh ? "内置 AI" : "Built-in AI"}</option>
+                  <option value="claude">Claude</option><option value="groq">Groq</option>
+                  <option value="ollama">Ollama</option><option value="openrouter">OpenRouter</option>
+                  <option value="openai">OpenAI</option>
+                </ProductSelect>
+                <ProductSelect value={modelConfig.model} onChange={(event) => setModelConfig((previous: ModelConfig) => ({ ...previous, model: event.target.value }))}>
+                  {modelOptions[modelConfig.provider].map((model: string) => <option key={model} value={model}>{model}</option>)}
+                </ProductSelect>
+              </div>
+              {modelConfig.provider === "ollama" && (
+                <div className="mt-5">
+                  <h4 className="text-xs font-semibold text-foreground">{zh ? "可用的 Ollama 模型" : "Available Ollama models"}</h4>
+                  {error && <div className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div>}
+                  <div className="mt-3 grid max-h-64 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                    {models.map((model) => (
+                      <button type="button" key={model.id}
+                        className={`rounded-lg border p-3 text-left transition ${modelConfig.model === model.name ? "border-primary/45 bg-primary/10" : "border-border/70 hover:bg-accent/50"}`}
+                        onClick={() => setModelConfig((previous: ModelConfig) => ({ ...previous, model: model.name }))}
+                      >
+                        <span className="block text-[13px] font-medium text-foreground">{model.name}</span>
+                        <span className="mt-1 block text-[11px] text-muted-foreground">{zh ? "大小" : "Size"}: {model.size} · {zh ? "更新" : "Modified"}: {model.modified}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
-                {modelConfig.provider === 'ollama' && (
-                  <div>
-                    <h4 className="text-lg font-bold mb-4">Available Ollama Models</h4>
-                    {error && (
-                      <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-                        {error}
-                      </div>
-                    )}
-                    <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-2">
-                      {models.map((model) => (
-                        <div
-                          key={model.id}
-                          className={`bg-white p-4 rounded-lg shadow cursor-pointer transition-colors ${modelConfig.model === model.name ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'
-                            }`}
-                          onClick={() => setModelConfig((prev: ModelConfig) => ({ ...prev, model: model.name }))}
-                        >
-                          <h3 className="font-bold">{model.name}</h3>
-                          <p className="text-gray-600">Size: {model.size}</p>
-                          <p className="text-gray-600">Modified: {model.modified}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+              )}
+            </section>
           </div>
+          <DialogFooter className="mx-6 mb-5">
+            <ProductButton variant="primary" onClick={() => onClose("modelSettings")}>{zh ? "完成" : "Done"}</ProductButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          {/* Footer */}
-          <div className="border-t p-6 flex justify-end">
-            <button
-              onClick={() => onClose('modelSettings')}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
+      <Dialog open={modals.deviceSettings} onOpenChange={(open) => !open && onClose("deviceSettings")}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>{zh ? "音频设备" : "Audio devices"}</DialogTitle><DialogDescription>{zh ? "选择会议录音使用的麦克风和系统声音来源。" : "Choose the microphone and system audio sources used for recording."}</DialogDescription></DialogHeader>
+          <DeviceSelection selectedDevices={selectedDevices} onDeviceChange={setSelectedDevices} disabled={isRecording} />
+          <DialogFooter>
+            <ProductButton variant="primary" onClick={() => {
+              const micDevice = selectedDevices.micDevice || (zh ? "默认设备" : "Default");
+              const systemDevice = selectedDevices.systemDevice || (zh ? "默认设备" : "Default");
+              toast.success(zh ? "音频设备已更新" : "Audio devices updated", { description: zh ? `麦克风：${micDevice}；系统声音：${systemDevice}` : `Microphone: ${micDevice}; System audio: ${systemDevice}` });
+              onClose("deviceSettings");
+            }}>{zh ? "完成" : "Done"}</ProductButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={modals.languageSettings} onOpenChange={(open) => !open && onClose("languageSettings")}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>{zh ? "识别语言" : "Recognition language"}</DialogTitle><DialogDescription>{zh ? "设置录音转写时优先识别的语言。" : "Set the language preferred during transcription."}</DialogDescription></DialogHeader>
+          <LanguageSelection selectedLanguage={selectedLanguage} onLanguageChange={setSelectedLanguage} disabled={isRecording} provider={transcriptModelConfig.provider} />
+          <DialogFooter><ProductButton variant="primary" onClick={() => onClose("languageSettings")}>{zh ? "完成" : "Done"}</ProductButton></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={modals.modelSelector} onOpenChange={(open) => !open && onClose("modelSelector")}>
+        <DialogContent className="flex max-h-[88vh] max-w-4xl flex-col overflow-hidden p-0">
+          <DialogHeader className="border-b border-border/70 px-6 pb-4 pt-5">
+            <DialogTitle>{messages.modelSelector ? (zh ? "需要配置语音识别" : "Speech recognition setup required") : (zh ? "转写模型设置" : "Transcription model settings")}</DialogTitle>
+            <DialogDescription>{zh ? "选择适合当前会议的识别模型与参数。" : "Choose the recognition model and options for this meeting."}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            <TranscriptSettings transcriptModelConfig={transcriptModelConfig} setTranscriptModelConfig={setTranscriptModelConfig} onModelSelect={() => onClose("modelSelector")} />
           </div>
-        </div>
-      </div>
-    )}
+          <DialogFooter className="mx-6 mb-5 items-center sm:justify-between">
+            <label className="flex min-w-0 items-center gap-3 text-left">
+              <Switch checked={showConfidenceIndicator} onCheckedChange={toggleConfidenceIndicator} />
+              <span className="min-w-0"><span className="block text-xs font-medium text-foreground">{zh ? "显示识别置信度" : "Show confidence indicators"}</span><span className="mt-0.5 block text-[11px] text-muted-foreground">{zh ? "用状态标记提示转写质量。" : "Show compact quality indicators in transcripts."}</span></span>
+            </label>
+            <ProductButton onClick={() => onClose("modelSelector")}>{messages.modelSelector ? (zh ? "取消" : "Cancel") : (zh ? "完成" : "Done")}</ProductButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-    {/* Device Settings Modal */}
-    {modals.deviceSettings && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Audio Device Settings</h3>
-            <button
-              onClick={() => onClose('deviceSettings')}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+      <Dialog open={modals.errorAlert} onOpenChange={(open) => !open && onClose("errorAlert")}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><span className="mb-1 grid h-9 w-9 place-items-center rounded-lg bg-destructive/10 text-destructive"><AlertCircle className="h-4 w-4" /></span><DialogTitle>{zh ? "录音已停止" : "Recording stopped"}</DialogTitle><DialogDescription>{messages.errorAlert}</DialogDescription></DialogHeader>
+          <DialogFooter><ProductButton onClick={() => onClose("errorAlert")}>{zh ? "知道了" : "Dismiss"}</ProductButton></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          <DeviceSelection
-            selectedDevices={selectedDevices}
-            onDeviceChange={setSelectedDevices}
-            disabled={isRecording}
-          />
-
-          <div className="mt-6 flex justify-end">
-            <button
-              onClick={() => {
-                const micDevice = selectedDevices.micDevice || 'Default';
-                const systemDevice = selectedDevices.systemDevice || 'Default';
-                toast.success("Devices selected", {
-                  description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-                });
-                onClose('deviceSettings');
-              }}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Language Settings Modal */}
-    {modals.languageSettings && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Language Settings</h3>
-            <button
-              onClick={() => onClose('languageSettings')}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <LanguageSelection
-            selectedLanguage={selectedLanguage}
-            onLanguageChange={setSelectedLanguage}
-            disabled={isRecording}
-            provider={transcriptModelConfig.provider}
-          />
-
-          <div className="mt-6 flex justify-end">
-            <button
-              onClick={() => onClose('languageSettings')}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Model Selection Modal */}
-    {modals.modelSelector && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg max-w-4xl w-full mx-4 shadow-xl max-h-[90vh] flex flex-col">
-          {/* Fixed Header */}
-          <div className="flex justify-between items-center p-6 pb-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900">
-              {messages.modelSelector ? 'Speech Recognition Setup Required' : 'Transcription Model Settings'}
-            </h3>
-            <button
-              onClick={() => onClose('modelSelector')}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto p-6 pt-4">
-            <TranscriptSettings
-              transcriptModelConfig={transcriptModelConfig}
-              setTranscriptModelConfig={setTranscriptModelConfig}
-              onModelSelect={() => onClose('modelSelector')}
-            />
-          </div>
-
-          {/* Fixed Footer */}
-          <div className="p-6 pt-4 border-t border-gray-200 flex items-center justify-between">
-            {/* Confidence Indicator Toggle */}
-            <div className="flex items-center gap-3">
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showConfidenceIndicator}
-                  onChange={(e) => toggleConfidenceIndicator(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-              <div>
-                <p className="text-sm font-medium text-gray-700">Show Confidence Indicators</p>
-                <p className="text-xs text-gray-500">Display colored dots showing transcription confidence quality</p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => onClose('modelSelector')}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-            >
-              {messages.modelSelector ? 'Cancel' : 'Done'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Error Alert Modal */}
-    {modals.errorAlert && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <Alert className="max-w-md mx-4 border-red-200 bg-white shadow-xl">
-          <AlertTitle className="text-red-800">Recording Stopped</AlertTitle>
-          <AlertDescription className="text-red-700">
-            {messages.errorAlert}
-            <button
-              onClick={() => onClose('errorAlert')}
-              className="ml-2 text-red-600 hover:text-red-800 underline"
-            >
-              Dismiss
-            </button>
-          </AlertDescription>
-        </Alert>
-      </div>
-    )}
-
-    {/* Chunk Drop Warning Modal */}
-    {modals.chunkDropWarning && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <Alert className="max-w-lg mx-4 border-yellow-200 bg-white shadow-xl">
-          <AlertTitle className="text-yellow-800">Transcription Performance Warning</AlertTitle>
-          <AlertDescription className="text-yellow-700">
-            {messages.chunkDropWarning}
-            <button
-              onClick={() => onClose('chunkDropWarning')}
-              className="ml-2 text-yellow-600 hover:text-yellow-800 underline"
-            >
-              Dismiss
-            </button>
-          </AlertDescription>
-        </Alert>
-      </div>
-    )}
-  </>
+      <Dialog open={modals.chunkDropWarning} onOpenChange={(open) => !open && onClose("chunkDropWarning")}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><span className="mb-1 grid h-9 w-9 place-items-center rounded-lg bg-amber-100 text-amber-700"><TriangleAlert className="h-4 w-4" /></span><DialogTitle>{zh ? "转写速度暂时跟不上录音" : "Transcription is falling behind"}</DialogTitle><DialogDescription>{messages.chunkDropWarning}</DialogDescription></DialogHeader>
+          <DialogFooter><ProductButton onClick={() => onClose("chunkDropWarning")}>{zh ? "知道了" : "Dismiss"}</ProductButton></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }

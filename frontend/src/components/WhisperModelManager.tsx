@@ -14,6 +14,8 @@ import {
   WhisperAPI
 } from '../lib/whisper';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface ModelManagerProps {
   selectedModel?: string;
@@ -28,6 +30,7 @@ export function ModelManager({
   className = '',
   autoSave = false
 }: ModelManagerProps) {
+  const { locale } = useLanguage();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +111,7 @@ export function ModelManager({
         console.error('Failed to initialize Whisper:', err);
         setError(err instanceof Error ? err.message : 'Failed to load models');
         toast.error('Failed to load transcription models', {
-          description: err instanceof Error ? err.message : 'Unknown error',
+          description: toUserFacingError(err, locale).message,
           duration: 5000
         });
       } finally {
@@ -221,7 +224,7 @@ export function ModelManager({
           progressThrottleRef.current.delete(modelName);
 
           toast.error(`Failed to download ${displayName}`, {
-            description: error,
+            description: toUserFacingError(error, locale).message,
             duration: 6000,
             action: {
               label: 'Retry',
@@ -283,7 +286,7 @@ export function ModelManager({
     } catch (err) {
       console.error('Failed to cancel download:', err);
       toast.error('Failed to cancel download', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: toUserFacingError(err, locale).message,
         duration: 4000
       });
     }
@@ -367,7 +370,7 @@ export function ModelManager({
     } catch (err) {
       console.error('Failed to delete model:', err);
       toast.error(`Failed to delete ${displayName}`, {
-        description: err instanceof Error ? err.message : 'Delete failed',
+        description: toUserFacingError(err, locale).message,
         duration: 4000
       });
     }

@@ -1,7 +1,9 @@
 'use client';
 
-import React from 'react';
-import { X, Info, Shield } from 'lucide-react';
+import { Info, ShieldCheck } from 'lucide-react';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ProductButton } from '@/components/ui/ProductControls';
 
 interface AnalyticsDataModalProps {
   isOpen: boolean;
@@ -10,150 +12,79 @@ interface AnalyticsDataModalProps {
 }
 
 export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }: AnalyticsDataModalProps) {
-  if (!isOpen) return null;
+  const { locale } = useLanguage();
+  const zh = locale === 'zh-CN';
+  const categories = zh ? [
+    ['模型偏好', '转写模型、总结模型及模型服务商。'],
+    ['匿名会议指标', '录音与暂停时长、文字段数和处理的音频块数量。'],
+    ['设备类型', '仅区分蓝牙、有线或未知，不收集具体设备名称。'],
+    ['功能使用情况', '应用启动、会话时长、功能使用和错误出现次数。'],
+    ['平台信息', '操作系统、应用版本和处理器架构。'],
+  ] : [
+    ['Model preferences', 'Transcription and summary models, plus the selected provider.'],
+    ['Anonymous meeting metrics', 'Recording and pause duration, transcript segment count, and audio chunks processed.'],
+    ['Device types', 'Bluetooth, wired, or unknown only. Specific device names are never collected.'],
+    ['Feature usage', 'App sessions, feature usage, session duration, and error occurrences.'],
+    ['Platform information', 'Operating system, app version, and processor architecture.'],
+  ];
+  const excluded = zh
+    ? ['会议名称或标题', '文件名、文件路径和会议文件夹', '录音、文字稿或会议内容', '具体设备名称', '个人信息或可识别数据']
+    : ['Meeting names or titles', 'File names, paths, or meeting folders', 'Recordings, transcripts, or meeting content', 'Specific device names', 'Personal or identifiable information'];
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <div className="flex items-center gap-3">
-            <Shield className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-semibold text-gray-900">What Analytics Collects</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex max-h-[88vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/70 px-6 pb-4 pt-5">
+          <span className="mb-1 grid h-9 w-9 place-items-center rounded-lg bg-emerald-500/10 text-emerald-700"><ShieldCheck className="h-4 w-4" /></span>
+          <DialogTitle>{zh ? '使用情况分析会收集什么' : 'What usage analytics collects'}</DialogTitle>
+          <DialogDescription>{zh ? '分析功能默认关闭；启用后只发送匿名的产品与性能数据。' : 'Analytics is off by default. When enabled, it sends anonymous product and performance data only.'}</DialogDescription>
+        </DialogHeader>
 
-        {/* Content */}
-        <div className="p-6 space-y-6">
-          {/* Privacy Notice */}
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
-              <div className="text-sm text-green-800">
-                <p className="font-semibold mb-1">Your Privacy is Protected</p>
-                <p>Analytics is off by default. If you enable it, we collect <strong>anonymous usage data only</strong>. No meeting content, names, file paths, or personal information is ever collected.</p>
-              </div>
-            </div>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          <div className="flex gap-3 rounded-lg bg-emerald-500/8 px-3.5 py-3 text-[13px] leading-5 text-emerald-900">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+            <p>{zh ? 'CalMee 不收集会议内容、姓名、文件路径或个人信息。以下数据只用于判断兼容性、性能和功能使用情况。' : 'CalMee does not collect meeting content, names, file paths, or personal information. The data below is used only to understand compatibility, performance, and feature usage.'}</p>
           </div>
 
-          {/* Data Categories */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">Data We Collect When Enabled:</h3>
-
-            {/* Model Preferences */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">1. Model Preferences</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                <li>• Transcription model (e.g., "Whisper large-v3", "Parakeet")</li>
-                <li>• Summary model (e.g., "Llama 3.2", "Claude Sonnet")</li>
-                <li>• Model provider (e.g., "Local", "Ollama", "OpenRouter")</li>
-              </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us understand which models users prefer</p>
+          <section>
+            <h3 className="text-xs font-semibold text-foreground">{zh ? '启用后收集' : 'Collected when enabled'}</h3>
+            <div className="mt-2 divide-y divide-border/60 rounded-xl bg-muted/35 px-4">
+              {categories.map(([title, description], index) => (
+                <div key={title} className="grid grid-cols-[24px_1fr] gap-2.5 py-3">
+                  <span className="font-mono text-[11px] text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
+                  <div><div className="text-[13px] font-medium text-foreground">{title}</div><div className="mt-0.5 text-[12px] leading-5 text-muted-foreground">{description}</div></div>
+                </div>
+              ))}
             </div>
+          </section>
 
-            {/* Meeting Metrics */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">2. Anonymous Meeting Metrics</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                <li>• Recording duration (e.g., "125 seconds")</li>
-                <li>• Pause duration (e.g., "5 seconds")</li>
-                <li>• Number of transcript segments</li>
-                <li>• Number of audio chunks processed</li>
-              </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us optimize performance and understand usage patterns</p>
-            </div>
-
-            {/* Device Types */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">3. Device Types (Not Names)</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                <li>• Microphone type: "Bluetooth" or "Wired" or "Unknown"</li>
-                <li>• System audio type: "Bluetooth" or "Wired" or "Unknown"</li>
-              </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us improve compatibility, NOT the actual device names</p>
-            </div>
-
-            {/* Usage Patterns */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">4. App Usage Patterns</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                <li>• App started/stopped events</li>
-                <li>• Session duration</li>
-                <li>• Feature usage (e.g., "settings changed")</li>
-                <li>• Error occurrences (helps us fix bugs)</li>
-              </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us improve user experience</p>
-            </div>
-
-            {/* Platform Info */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">5. Platform Information</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                <li>• Operating system (e.g., "macOS", "Windows")</li>
-                <li>• App version (automatically included in all events)</li>
-                <li>• Architecture (e.g., "x86_64", "aarch64")</li>
-              </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us prioritize platform support</p>
-            </div>
-          </div>
-
-          {/* What We DON'T Collect */}
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <h4 className="font-semibold text-red-900 mb-2">What We DON'T Collect:</h4>
-            <ul className="text-sm text-red-800 space-y-1 ml-4">
-              <li>• ❌ Meeting names or titles</li>
-              <li>• ❌ File names, file paths, or meeting folders</li>
-              <li>• ❌ Meeting transcripts or content</li>
-              <li>• ❌ Audio recordings</li>
-              <li>• ❌ Device names (only types: Bluetooth/Wired)</li>
-              <li>• ❌ Personal information</li>
-              <li>• ❌ Any identifiable data</li>
+          <section>
+            <h3 className="text-xs font-semibold text-foreground">{zh ? '明确不收集' : 'Never collected'}</h3>
+            <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+              {excluded.map((item) => <li key={item} className="rounded-lg bg-destructive/6 px-3 py-2 text-[12px] text-foreground">{item}</li>)}
             </ul>
-          </div>
+          </section>
 
-          {/* Example Event */}
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <h4 className="font-semibold text-gray-900 mb-2">Example Event:</h4>
-            <pre className="text-xs text-gray-700 overflow-x-auto">
-              {`{
+          <details className="rounded-lg border border-border/70 px-3.5 py-3 text-xs">
+            <summary className="cursor-pointer font-medium text-foreground">{zh ? '查看匿名事件示例' : 'View an anonymous event example'}</summary>
+            <pre className="mt-3 overflow-x-auto rounded-lg bg-muted/55 p-3 font-mono text-[10px] leading-4 text-muted-foreground">{`{
   "event": "meeting_ended",
   "app_version": "${process.env.NEXT_PUBLIC_APP_VERSION ?? 'development'}",
   "transcription_provider": "parakeet",
-  "transcription_model": "parakeet-tdt-0.6b-v3-int8",
   "summary_provider": "ollama",
-  "summary_model": "llama3.2:latest",
   "total_duration_seconds": "125.5",
   "microphone_device_type": "Wired",
-  "system_audio_device_type": "Bluetooth",
   "chunks_processed": "150",
   "had_fatal_error": "false"
-}`}
-            </pre>
-          </div>
+}`}</pre>
+          </details>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between gap-4 p-6 border-t border-gray-200 bg-gray-50">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-          >
-            Keep Analytics Enabled
-          </button>
-          <button
-            onClick={onConfirmDisable}
-            className="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
-          >
-            Confirm: Disable Analytics
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter className="mx-6 mb-5 sm:justify-between">
+          <ProductButton onClick={onClose}>{zh ? '保持启用' : 'Keep enabled'}</ProductButton>
+          <ProductButton variant="danger" onClick={onConfirmDisable}>{zh ? '关闭使用情况分析' : 'Disable analytics'}</ProductButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

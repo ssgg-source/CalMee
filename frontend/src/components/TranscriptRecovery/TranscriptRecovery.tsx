@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ProductConfirmDialog } from '@/components/ui/ProductConfirmDialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { MeetingMetadata, StoredTranscript } from '@/services/indexedDBService';
@@ -48,6 +49,7 @@ export function TranscriptRecovery({
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
 
   // Reset selection when dialog opens
@@ -104,15 +106,12 @@ export function TranscriptRecovery({
   const handleDelete = async () => {
     if (!selectedMeetingId) return;
 
-    if (!confirm(zh ? '确定删除这条中断录音吗？此操作无法撤销。' : 'Delete this interrupted recording? This cannot be undone.')) {
-      return;
-    }
-
     setIsDeleting(true);
     try {
       await onDelete(selectedMeetingId);
       setSelectedMeetingId(null);
       setPreviewTranscripts([]);
+      setDeleteConfirmOpen(false);
     } catch (error) {
       console.error('Delete failed:', error);
       setOperationError(zh
@@ -126,6 +125,7 @@ export function TranscriptRecovery({
   const selectedMeeting = recoverableMeetings.find(m => m.meetingId === selectedMeetingId);
 
   return (
+    <>
     <Dialog open={isOpen} onOpenChange={(open) => { if (!open && !isRecovering && !isDeleting) onClose(); }}>
       <DialogContent className="flex h-[min(680px,78vh)] max-w-[860px] flex-col overflow-hidden rounded-[22px] border-black/[0.08] bg-[#fbfbfd] p-0 shadow-2xl">
         <DialogHeader className="border-b border-black/[0.06] bg-white px-6 pb-5 pt-6">
@@ -291,7 +291,7 @@ export function TranscriptRecovery({
           </Button>
           <Button
             variant="destructive"
-            onClick={handleDelete}
+            onClick={() => setDeleteConfirmOpen(true)}
             disabled={!selectedMeetingId || isRecovering || isDeleting}
           >
             {isDeleting ? (
@@ -325,5 +325,19 @@ export function TranscriptRecovery({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <ProductConfirmDialog
+      open={deleteConfirmOpen}
+      onOpenChange={setDeleteConfirmOpen}
+      title={zh ? '删除中断录音' : 'Delete interrupted recording'}
+      description={zh
+        ? '这条中断录音及其恢复检查点将被删除，此操作无法撤销。'
+        : 'This interrupted recording and its recovery checkpoint will be deleted. This cannot be undone.'}
+      confirmLabel={zh ? '确认删除' : 'Delete'}
+      cancelLabel={zh ? '取消' : 'Cancel'}
+      destructive
+      loading={isDeleting}
+      onConfirm={handleDelete}
+    />
+    </>
   );
 }

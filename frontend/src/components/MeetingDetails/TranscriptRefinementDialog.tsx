@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
 import { Switch } from "@/components/ui/switch";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -179,7 +180,7 @@ export function TranscriptRefinementDialog({
         setModels([]);
         if (preferredProvider === "builtin-ai") setModel("");
         toast.error(lt("Failed to load local AI models"), {
-          description: String(error),
+          description: toUserFacingError(error, locale).message,
         });
       })
       .finally(() => {
@@ -343,7 +344,7 @@ export function TranscriptRefinementDialog({
       );
     } catch (error) {
       toast.error(lt("AI transcript optimization failed"), {
-        description: String(error),
+        description: toUserFacingError(error, locale).message,
       });
     } finally {
       setStarting(false);

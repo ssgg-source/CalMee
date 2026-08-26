@@ -9,6 +9,7 @@ import { openMeetingWorkspace } from "@/lib/meeting-window";
 import { Button } from "@/components/ui/button";
 import { PersonProfileGenerationDialog } from "@/components/PersonProfileGenerationDialog";
 import { ProgressIconButton } from "@/components/MeetingWorkspace/ProgressIconButton";
+import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
 
 type ProfileEvidence={meeting:string;time:string;quote:string};
 type ProfileItem={trait:string;observation:string;confidence:"low"|"medium"|"high";evidence:ProfileEvidence[]};
@@ -48,7 +49,7 @@ export function PersonDetailView({personId,onBack}:{personId:string;onBack:()=>v
     try{
       const value=await invoke<PersonDetail>("api_get_person_detail",{personId});
       setDetail(value);setAliases(value.aliases.join("、"));setNotes(value.notes||"");setContext(value.profileContext||"");
-    }catch(error){toast.error(zh?"人员档案加载失败":"Could not load person",{description:String(error)});}
+    }catch(error){reportTechnicalError("person-detail-load",error);toast.error(zh?"人员档案加载失败":"Could not load person",{description:toUserFacingError(error,locale).message});}
   };
   useEffect(()=>{void load();},[personId]);
   useEffect(()=>{
@@ -63,7 +64,7 @@ export function PersonDetailView({personId,onBack}:{personId:string;onBack:()=>v
   },[personId,profilePollKey]);
   const profileRunning=profileJob.status==="processing";
   const profileProgressText=profileJob.progress?.stage==="validating"?(zh?"正在核验证据":"Verifying evidence"):profileJob.progress?.stage==="saving"?(zh?"正在保存画像":"Saving profile"):profileJob.progress?.stage==="preparing"?(zh?"正在准备发言":"Preparing statements"):(zh?"正在分析长期发言模式":"Analyzing speaking patterns");
-  const cancelProfile=async()=>{try{await invoke("api_cancel_person_profile",{personId});setProfileJob({status:"cancelled"});toast.info(zh?"已停止人物画像生成":"Profile generation stopped");}catch(error){toast.error(zh?"停止失败":"Could not stop",{description:String(error)});}};
+  const cancelProfile=async()=>{try{await invoke("api_cancel_person_profile",{personId});setProfileJob({status:"cancelled"});toast.info(zh?"已停止人物画像生成":"Profile generation stopped");}catch(error){reportTechnicalError("person-profile-cancel",error);toast.error(zh?"停止失败":"Could not stop",{description:toUserFacingError(error,locale).message});}};
   const groupedUtterances=useMemo(()=>{
     const groups=new Map<string,PersonDetail["utterances"]>();
     for(const item of detail?.utterances||[]){const list=groups.get(item.meetingId)||[];list.push(item);groups.set(item.meetingId,list);}
@@ -74,7 +75,7 @@ export function PersonDetailView({personId,onBack}:{personId:string;onBack:()=>v
     try{
       await invoke("api_update_person_profile",{personId,aliases:aliases.split(/[、,，\n]/).map(item=>item.trim()).filter(Boolean),notes:notes.trim()||null,profileContext:context.trim()||null});
       toast.success(zh?"人员档案已保存":"Person saved");await load();
-    }catch(error){toast.error(zh?"保存失败":"Save failed",{description:String(error)});}finally{setSaving(false);}
+    }catch(error){reportTechnicalError("person-detail-save",error);toast.error(zh?"保存失败":"Save failed",{description:toUserFacingError(error,locale).message});}finally{setSaving(false);}
   };
   if(!detail)return <div className="flex min-h-[420px] items-center justify-center text-slate-400"><Loader2 className="h-5 w-5 animate-spin"/></div>;
   const sourceLabel=(kind:string)=>kind==="ai_optimized"?(zh?"AI 优化稿":"AI optimized"):kind==="clustered"?(zh?"聚类稿":"Clustered"):(zh?"原始文稿":"Original");

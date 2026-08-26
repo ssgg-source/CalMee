@@ -78,26 +78,28 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    --background: 250 24% 98%;
+    --foreground: 226 28% 16%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 226 28% 16%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
+    --popover-foreground: 226 28% 16%;
+    --primary: 258 72% 58%;
     --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --secondary: 248 20% 95%;
+    --secondary-foreground: 226 24% 23%;
+    --muted: 246 18% 95%;
+    --muted-foreground: 224 12% 46%;
+    --accent: 254 55% 95%;
+    --accent-foreground: 258 62% 42%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
+    --border: 246 15% 88%;
+    --input: 246 15% 84%;
+    --ring: 258 72% 58%;
     --radius: 0.5rem;
+    --radius-control: 0.5rem;
+    --radius-panel: 0.875rem;
     --chart-1: 12 76% 61%;
     --chart-2: 173 58% 39%;
     --chart-3: 197 37% 24%;
@@ -143,6 +145,16 @@
     @apply bg-background text-foreground;
     overflow: hidden;
     height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-feature-settings: "kern" 1, "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
   }
 
   /* Make the window draggable */
@@ -211,6 +223,29 @@
   [data-node-type] {
     overflow: visible !important;
   }
+}
+
+@layer components {
+  .calmee-page {
+    @apply flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground;
+  }
+
+  .calmee-titlebar {
+    @apply shrink-0 border-b border-border/80 bg-background/95 backdrop-blur-xl;
+  }
+
+  .calmee-content {
+    @apply min-h-0 flex-1 overflow-y-auto;
+  }
+
+  .calmee-panel {
+    @apply rounded-xl border border-border/80 bg-card text-card-foreground shadow-surface;
+  }
+
+  .calmee-toolbar-button {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40;
+  }
+
 }
 /* Chrome-like tabs that merge into the application surface. */
 .calmee-browser-tab {
@@ -369,18 +404,155 @@
   margin: 5px 4px;
 }
 
-/* Meeting documents use the same stable BlockNote editor as AI summaries. */
+/* One editing language for meeting notes, compact notes and generated documents. */
+.calmee-editor-toolbar {
+  display: flex;
+  min-height: 49px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 18px;
+  border-bottom: 1px solid hsl(var(--border) / .72);
+  background: hsl(var(--card) / .94);
+  box-shadow: 0 1px 0 hsl(var(--foreground) / .018);
+  backdrop-filter: blur(16px);
+}
+
+.calmee-editor-toolbar-button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  transition: color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.calmee-editor-toolbar-button:hover:not(:disabled) {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent) / .72);
+}
+
+.calmee-editor-toolbar-button:active:not(:disabled) {
+  transform: scale(.96);
+}
+
+.calmee-editor-toolbar-button:focus-visible,
+.calmee-editor-style-trigger:focus-visible,
+.calmee-editor-mode-button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / .32);
+  outline-offset: 1px;
+}
+
+.calmee-editor-toolbar-button:disabled,
+.calmee-editor-style-trigger:disabled {
+  opacity: .34;
+}
+
+.calmee-editor-toolbar-button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.calmee-editor-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  flex: 0 0 1px;
+  margin: 0 5px;
+  background: hsl(var(--border) / .9);
+}
+
+.calmee-editor-style-trigger {
+  display: inline-flex;
+  height: 32px;
+  min-width: 84px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: hsl(var(--foreground) / .78);
+  background: hsl(var(--muted) / .58);
+  font-size: 12px;
+  font-weight: 550;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.calmee-editor-style-trigger:hover:not(:disabled),
+.calmee-editor-style-trigger[data-state="open"] {
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / .08);
+}
+
+.calmee-editor-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid hsl(var(--border) / .75);
+  border-radius: 9px;
+  background: hsl(var(--muted) / .42);
+}
+
+.calmee-editor-mode-button {
+  display: inline-flex;
+  width: 27px;
+  height: 27px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: hsl(var(--muted-foreground) / .72);
+  transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.calmee-editor-mode-button:hover {
+  color: hsl(var(--foreground));
+}
+
+.calmee-editor-mode-button.is-active {
+  color: hsl(var(--primary));
+  background: hsl(var(--card));
+  box-shadow: 0 1px 3px hsl(var(--foreground) / .1);
+}
+
+.calmee-markdown-source {
+  color: hsl(var(--foreground) / .86);
+  caret-color: hsl(var(--primary));
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  tab-size: 2;
+}
+
+.calmee-markdown-source::placeholder {
+  color: hsl(var(--muted-foreground) / .5);
+}
+
+.calmee-editor-canvas {
+  background: hsl(var(--card));
+}
+
+.calmee-editor-scroll {
+  scrollbar-gutter: stable;
+}
+
 .calmee-blocknote-editor .bn-container {
   min-height: 100%;
-  --bn-colors-editor-text: #334155;
-  --bn-colors-editor-background: #ffffff;
-  --bn-colors-menu-text: #334155;
-  --bn-colors-menu-background: #ffffff;
-  --bn-colors-hovered-background: #f5f3ff;
-  --bn-colors-selected-background: #7c3aed;
-  --bn-colors-selected-text: #ffffff;
-  --bn-colors-side-menu: #94a3b8;
-  --bn-colors-border: #e2e8f0;
+  --bn-colors-editor-text: hsl(var(--foreground) / .86);
+  --bn-colors-editor-background: hsl(var(--card));
+  --bn-colors-menu-text: hsl(var(--foreground) / .84);
+  --bn-colors-menu-background: hsl(var(--popover));
+  --bn-colors-hovered-background: hsl(var(--accent) / .72);
+  --bn-colors-selected-background: hsl(var(--primary));
+  --bn-colors-selected-text: hsl(var(--primary-foreground));
+  --bn-colors-side-menu: hsl(var(--muted-foreground) / .58);
+  --bn-colors-border: hsl(var(--border));
   --bn-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --bn-border-radius: 9px;
 }
@@ -388,48 +560,49 @@
 .calmee-blocknote-editor .bn-editor {
   box-sizing: border-box;
   min-height: calc(100vh - 330px);
-  max-width: 920px !important;
+  max-width: 860px !important;
   margin: 0 auto;
-  padding: 28px 52px 88px;
-  color: #334155;
-  font-size: 15px;
-  line-height: 1.72;
+  padding: 36px 58px 104px;
+  color: hsl(var(--foreground) / .86);
+  caret-color: hsl(var(--primary));
+  font-size: 15.5px;
+  line-height: 1.78;
 }
 
 .calmee-blocknote-editor .bn-block-content {
-  padding-block: 2px;
-  line-height: 1.72;
+  padding-block: 3px;
+  line-height: 1.78;
 }
 
 .calmee-blocknote-editor .bn-block-content[data-content-type="heading"] {
-  color: #0f172a;
-  letter-spacing: -.01em;
+  color: hsl(var(--foreground));
+  letter-spacing: -.018em;
 }
 
 .calmee-blocknote-editor .bn-block-content[data-content-type="heading"][data-level="1"] {
-  margin: 12px 0 4px;
-  font-size: 20px;
+  margin: 18px 0 5px;
+  font-size: 19px;
   font-weight: 680;
-  line-height: 1.42;
+  line-height: 1.38;
 }
 
 .calmee-blocknote-editor .bn-block-content[data-content-type="heading"][data-level="2"] {
-  margin: 10px 0 3px;
-  font-size: 17px;
+  margin: 15px 0 4px;
+  font-size: 16.5px;
   font-weight: 650;
   line-height: 1.48;
 }
 
 .calmee-blocknote-editor .bn-block-content[data-content-type="heading"][data-level="3"] {
-  margin: 8px 0 2px;
-  font-size: 16px;
+  margin: 12px 0 3px;
+  font-size: 15px;
   font-weight: 620;
   line-height: 1.5;
 }
 
 .calmee-blocknote-editor .bn-block-content[data-content-type="heading"][data-level="4"] {
-  margin: 7px 0 2px;
-  font-size: 15px;
+  margin: 10px 0 2px;
+  font-size: 14px;
   font-weight: 620;
   line-height: 1.55;
 }
@@ -437,7 +610,7 @@
 .calmee-blocknote-editor--compact .bn-editor {
   min-height: 100%;
   max-width: none !important;
-  padding: 10px 22px 40px;
+  padding: 12px 22px 44px;
   font-size: 13px;
   line-height: 1.62;
 }
@@ -470,6 +643,13 @@
 .calmee-blocknote-editor .bn-side-menu {
   transform: translateX(5px);
   gap: 0;
+  opacity: .42;
+  transition: opacity 140ms ease;
+}
+
+.calmee-blocknote-editor .bn-block-outer:hover .bn-side-menu,
+.calmee-blocknote-editor .bn-side-menu:hover {
+  opacity: 1;
 }
 
 .calmee-blocknote-editor .bn-side-menu .bn-button {
@@ -494,6 +674,45 @@
   width: 15px;
   height: 15px;
   flex: 0 0 15px;
+  accent-color: hsl(var(--primary));
+}
+
+.calmee-blocknote-editor .bn-block-content[data-content-type="quote"] {
+  margin: 5px 0;
+  padding: 5px 10px;
+  border-radius: 0 8px 8px 0;
+  background: hsl(var(--muted) / .42);
+}
+
+.calmee-blocknote-editor .bn-block-content[data-content-type="quote"] blockquote {
+  border-left-color: hsl(var(--primary) / .55);
+  color: hsl(var(--foreground) / .72);
+}
+
+.calmee-blocknote-editor .bn-inline-content a {
+  color: hsl(var(--primary));
+  text-decoration-line: underline;
+  text-decoration-color: hsl(var(--primary) / .3);
+  text-underline-offset: 3px;
+}
+
+.calmee-blocknote-editor .bn-inline-content code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  color: hsl(var(--foreground) / .82);
+  background: hsl(var(--muted) / .7);
+  font-size: .88em;
+}
+
+.calmee-blocknote-editor .bn-inline-content ::selection,
+.calmee-blocknote-editor .bn-inline-content::selection {
+  color: hsl(var(--foreground));
+  background: hsl(var(--primary) / .18);
+}
+
+.calmee-blocknote-editor--summary .bn-editor {
+  min-height: 420px;
+  padding-top: 30px;
 }
 
 /* Plus/slash insertion menu: compact choices without explanatory copy. */
@@ -559,10 +778,12 @@
 .bn-shadcn .bn-toolbar {
   max-width: min(680px, calc(100vw - 48px));
   overflow: visible !important;
-  padding: 3px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(51, 65, 85, .14);
+  padding: 4px;
+  border: 1px solid hsl(var(--border) / .82);
+  border-radius: 11px;
+  background: hsl(var(--popover) / .97);
+  box-shadow: 0 14px 38px hsl(var(--foreground) / .15);
+  backdrop-filter: blur(16px);
   font-size: 12px;
 }
 
@@ -570,77 +791,12 @@
   min-width: 28px;
   height: 28px;
   padding: 4px 6px;
+  border-radius: 7px;
 }
 
 .bn-shadcn .bn-toolbar svg {
-  width: 16px;
-  height: 16px;
-}
-
-.calmee-selection-block-menu {
-  position: relative;
-  align-self: stretch;
-}
-
-.calmee-selection-block-trigger {
-  display: flex;
-  height: 28px;
-  min-width: 82px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 6px;
-  color: #475569;
-  background: transparent;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.calmee-selection-block-trigger:hover,
-.calmee-selection-block-trigger[aria-expanded="true"] {
-  color: #6d28d9;
-  background: #f5f3ff;
-}
-
-.calmee-selection-block-options {
-  position: absolute;
-  z-index: 80;
-  top: calc(100% + 6px);
-  left: 0;
-  display: grid;
-  width: 224px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: 5px;
-  border: 1px solid #e2e8f0;
-  border-radius: 9px;
-  color: #475569;
-  background: rgba(255, 255, 255, .98);
-  box-shadow: 0 12px 32px rgba(51, 65, 85, .18);
-  backdrop-filter: blur(14px);
-}
-
-.calmee-selection-block-option {
-  display: flex;
-  height: 29px;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 6px;
-  color: inherit;
-  background: transparent;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.calmee-selection-block-option:hover,
-.calmee-selection-block-option[aria-selected="true"] {
-  color: #6d28d9;
-  background: #f5f3ff;
+  width: 15px;
+  height: 15px;
 }
 
 .calmee-meeting-workspace {

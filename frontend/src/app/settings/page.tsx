@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
-import { motion } from 'framer-motion';
 import { TranscriptSettings } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
@@ -15,6 +14,7 @@ import { DedaoSettings } from '@/components/DedaoSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { ProductPage, ProductPageContent, ProductPageHeader } from '@/components/layout/ProductPage';
 
 // Tabs configuration (constant)
 const TABS = [
@@ -32,10 +32,7 @@ export default function SettingsPage() {
   const { t } = useLanguage();
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
 
-  // Animation state for tabs
   const [activeTab, setActiveTab] = useState('general');
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('tab');
@@ -62,85 +59,54 @@ export default function SettingsPage() {
     loadTranscriptConfig();
   }, [setTranscriptModelConfig]);
 
-  // Update underline position when active tab changes
-  useLayoutEffect(() => {
-    const activeIndex = TABS.findIndex(tab => tab.value === activeTab);
-    const activeTabElement = tabRefs.current[activeIndex];
-
-    if (activeTabElement) {
-      const { offsetLeft, offsetWidth } = activeTabElement;
-      setUnderlineStyle({ left: offsetLeft, width: offsetWidth });
-    }
-  }, [activeTab]);
-
   return (
-    <div className="h-screen bg-[#f8f7fb] flex flex-col">
-      {/* Fixed Header */}
-      <div className="sticky top-0 z-10 bg-[#f8f7fb] border-b border-violet-100">
-        <div className="max-w-6xl mx-auto px-8 py-6">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.back()}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5" />
-              <span>{t('settings.back')}</span>
-            </button>
-            <h1 className="text-3xl font-bold">{t('settings.title')}</h1>
-          </div>
-        </div>
-      </div>
-
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto p-8 pt-6">
-          {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="bg-transparent relative rounded-none border-b border-gray-200 p-0 h-auto">
-              {TABS.map((tab, index) => {
+    <ProductPage>
+      <ProductPageHeader
+        title={t('settings.title')}
+        backLabel={t('settings.back')}
+        onBack={() => router.back()}
+      />
+      <ProductPageContent className="overflow-hidden">
+        <Tabs value={activeTab} onValueChange={setActiveTab} orientation="vertical" className="mx-auto grid h-full max-w-[1180px] grid-cols-[210px_minmax(0,1fr)]">
+          <aside className="border-r border-border/80 bg-card/55 px-3 py-5">
+            <TabsList className="flex h-auto w-full flex-col items-stretch justify-start gap-1 rounded-none bg-transparent p-0">
+              {TABS.map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <TabsTrigger
                     key={tab.value}
                     value={tab.value}
-                    ref={el => { tabRefs.current[index] = el }}
-                    className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-violet-600 data-[state=active]:shadow-none text-gray-600 hover:text-gray-900 relative z-10"
+                    className="h-10 w-full justify-start gap-3 rounded-lg border-0 bg-transparent px-3 text-[13px] text-muted-foreground shadow-none transition-colors hover:bg-accent/70 hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-medium data-[state=active]:text-accent-foreground data-[state=active]:shadow-none"
                   >
-                    <Icon className="w-4 h-4" />
+                    <Icon className="h-4 w-4" strokeWidth={1.8} />
                     {t(tab.labelKey)}
                   </TabsTrigger>
                 );
               })}
-
-              <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-violet-600"
-                layoutId="underline"
-                style={{ left: underlineStyle.left, width: underlineStyle.width }}
-                transition={{ type: 'spring', stiffness: 400, damping: 40 }}
-              />
             </TabsList>
-
-            <TabsContent value="general">
+          </aside>
+          <div className="min-h-0 overflow-y-auto px-8 pb-12 pt-7">
+            <TabsContent value="general" className="m-0">
               <PreferenceSettings />
             </TabsContent>
-            <TabsContent value="recording">
+            <TabsContent value="recording" className="m-0">
               <RecordingSettings />
             </TabsContent>
-            <TabsContent value="Transcriptionmodels">
+            <TabsContent value="Transcriptionmodels" className="m-0">
               <TranscriptSettings
                 transcriptModelConfig={transcriptModelConfig}
                 setTranscriptModelConfig={setTranscriptModelConfig}
               />
             </TabsContent>
-            <TabsContent value="summaryModels">
+            <TabsContent value="summaryModels" className="m-0">
               <SummaryModelSettings />
             </TabsContent>
-            <TabsContent value="calendar"><CalendarSettings /></TabsContent>
-            <TabsContent value="dedao"><DedaoSettings /></TabsContent>
-            <TabsContent value="dataMigration"><DataMigrationSettings /></TabsContent>
-          </Tabs>
-        </div>
-      </div>
-    </div>
+            <TabsContent value="calendar" className="m-0"><CalendarSettings /></TabsContent>
+            <TabsContent value="dedao" className="m-0"><DedaoSettings /></TabsContent>
+            <TabsContent value="dataMigration" className="m-0"><DataMigrationSettings /></TabsContent>
+          </div>
+        </Tabs>
+      </ProductPageContent>
+    </ProductPage>
   );
 };

@@ -3,12 +3,15 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface UseModelConfigurationProps {
   serverAddress: string | null;
 }
 
 export function useModelConfiguration({ serverAddress }: UseModelConfigurationProps) {
+  const { locale } = useLanguage();
   // Note: No hardcoded defaults - DB is the source of truth
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
@@ -150,8 +153,8 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
 
       await Analytics.trackSettingsChanged('model_config', `${payload.provider}_${payload.model}`);
     } catch (error) {
-      console.error('Failed to save model config:', error);
-      toast.error("Failed to save summary settings", { description: String(error) });
+      reportTechnicalError('summary-model-save', error);
+      toast.error(locale === 'zh-CN' ? '总结模型设置保存失败' : 'Failed to save summary settings', { description: toUserFacingError(error, locale).message });
       if (error instanceof Error) {
         setError(error.message);
       } else {

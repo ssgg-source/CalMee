@@ -15,9 +15,6 @@ import {
   SideMenu,
   SideMenuController,
   SuggestionMenuController,
-  useBlockNoteEditor,
-  useSelectedBlocks,
-  type BlockTypeSelectItem,
   type DefaultReactSuggestionItem,
   type SideMenuProps,
   type SuggestionMenuProps,
@@ -99,76 +96,6 @@ function CompactSuggestionMenu({
           <span className="truncate">{item.title}</span>
         </button>
       ))}
-    </div>
-  );
-}
-
-function StableBlockTypeMenu({ items }: { items: BlockTypeSelectItem[] }) {
-  const editor = useBlockNoteEditor();
-  const selectedBlocks = useSelectedBlocks(editor);
-  const [open, setOpen] = useState(false);
-  const isItemSelected = (item: BlockTypeSelectItem) =>
-    selectedBlocks.length > 0 && selectedBlocks.every((block) => item.isSelected(block as never));
-  const selected = items.find(isItemSelected);
-  const SelectedIcon = selected?.icon;
-
-  const apply = (item: BlockTypeSelectItem) => {
-    editor.transact(() => {
-      for (const block of selectedBlocks) {
-        editor.updateBlock(block, {
-          type: item.type as never,
-          props: item.props as never,
-        });
-      }
-    });
-    setOpen(false);
-    editor.focus();
-  };
-
-  if (!selected) return null;
-
-  return (
-    <div className="calmee-selection-block-menu">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="calmee-selection-block-trigger"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen((value) => !value);
-        }}
-      >
-        {SelectedIcon && <SelectedIcon size={15} />}
-        <span>{selected.name}</span>
-        <span className="text-[9px] text-slate-400">▾</span>
-      </button>
-      {open && (
-        <div className="calmee-selection-block-options" role="listbox">
-          {items.map((item) => {
-            const Icon = item.icon;
-            const isSelected = isItemSelected(item);
-            return (
-              <button
-                key={`${item.type}-${JSON.stringify(item.props || {})}`}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  apply(item);
-                }}
-                className="calmee-selection-block-option"
-              >
-                <Icon size={14} />
-                <span className="truncate">{item.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -382,8 +309,8 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
     }).catch(error => console.error('Failed to update Markdown document', error));
   };
 
-  return <div className={`calmee-blocknote-editor relative h-full min-h-0 bg-white ${compact ? "calmee-blocknote-editor--compact" : ""}`}>
-    <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+  return <div className={`calmee-blocknote-editor calmee-editor-canvas relative h-full min-h-0 ${compact ? "calmee-blocknote-editor--compact" : ""}`}>
+    <div ref={scrollContainerRef} className="calmee-editor-scroll h-full overflow-y-auto">
       <BlockNoteView
         editor={editor}
         editable
@@ -402,8 +329,7 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
         <FormattingToolbarController
           formattingToolbar={() => (
             <FormattingToolbar>
-              <StableBlockTypeMenu items={compactBlockTypeItems} />
-              {getFormattingToolbarItems(compactBlockTypeItems).slice(1)}
+              {getFormattingToolbarItems(compactBlockTypeItems)}
             </FormattingToolbar>
           )}
         />

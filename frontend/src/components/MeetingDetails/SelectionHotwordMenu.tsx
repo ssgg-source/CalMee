@@ -5,6 +5,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { BookPlus, Loader2, ReplaceAll } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { ProductButton, ProductInput } from '@/components/ui/ProductControls';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 type MenuState = { x: number; y: number; text: string } | null;
 
@@ -46,7 +48,8 @@ export function SelectionHotwordMenu({ children }: { children: React.ReactNode }
       toast.success(lt('Added to hotwords'), { description: menu.text });
       setMenu(null);
     } catch (error) {
-      toast.error(lt('Failed to add hotword'), { description: String(error) });
+      reportTechnicalError('selection-hotword-add', error);
+      toast.error(lt('Failed to add hotword'), { description: toUserFacingError(error, locale).message });
     } finally {
       setSaving(false);
     }
@@ -70,11 +73,12 @@ export function SelectionHotwordMenu({ children }: { children: React.ReactNode }
       setCorrecting(false);
       setReplacement('');
     } catch (error) {
+      reportTechnicalError('selection-hotword-correct', error);
       toast.error(
         replacedCount
           ? locale === 'zh-CN' ? '文字已替换，但热词保存失败' : 'Text was replaced, but the hotword could not be saved'
           : locale === 'zh-CN' ? '批量纠错失败' : 'Batch correction failed',
-        { description: String(error) },
+        { description: toUserFacingError(error, locale).message },
       );
     } finally {
       setSaving(false);
@@ -95,24 +99,24 @@ export function SelectionHotwordMenu({ children }: { children: React.ReactNode }
   >
     {children}
     {menu && <div
-      className="fixed z-[100] w-max min-w-0 max-w-60 rounded-lg border border-slate-200 bg-white p-1 shadow-xl"
+      className="fixed z-50 w-max min-w-0 max-w-60 rounded-xl border border-border/80 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_40px_hsl(var(--foreground)/0.14)] backdrop-blur-xl"
       style={{ left: menu.x, top: menu.y }}
       onMouseDown={event => event.stopPropagation()}
     >
-      <button onMouseDown={event => event.preventDefault()} onClick={() => void add()} disabled={saving} className="flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-violet-50 disabled:opacity-50">
+      <button onMouseDown={event => event.preventDefault()} onClick={() => void add()} disabled={saving} className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-2 text-left text-[13px] text-foreground transition hover:bg-accent disabled:opacity-50">
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookPlus className="h-4 w-4 text-violet-600" />}
         <span>{locale === 'zh-CN' ? '添加热词' : 'Add hotword'}</span>
       </button>
-      <button onMouseDown={event => event.preventDefault()} onClick={() => { setCorrecting(true); setReplacement(''); }} disabled={saving} className="flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-violet-50 disabled:opacity-50">
+      <button onMouseDown={event => event.preventDefault()} onClick={() => { setCorrecting(true); setReplacement(''); }} disabled={saving} className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-2 text-left text-[13px] text-foreground transition hover:bg-accent disabled:opacity-50">
         <ReplaceAll className="h-4 w-4 text-violet-600" />
         <span>{locale === 'zh-CN' ? '批量纠错' : 'Batch correction'}</span>
       </button>
-      {correcting && <div className="mt-1 w-56 border-t border-slate-100 p-2">
-        <div className="mb-1.5 truncate text-xs text-slate-400">{menu.text} →</div>
-        <input autoFocus value={replacement} onChange={event => setReplacement(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void correctAll(); }} placeholder={locale === 'zh-CN' ? '输入正确词语' : 'Enter the correct term'} className="h-9 w-full rounded-md border border-slate-200 px-2.5 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
-        <button onClick={() => void correctAll()} disabled={saving || !replacement.trim()} className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-violet-600 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+      {correcting && <div className="mt-1 w-56 border-t border-border/70 p-2 pt-2.5">
+        <div className="mb-1.5 truncate text-xs text-muted-foreground">{menu.text} →</div>
+        <ProductInput autoFocus value={replacement} onChange={event => setReplacement(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void correctAll(); }} placeholder={locale === 'zh-CN' ? '输入正确词语' : 'Enter the correct term'} className="w-full" />
+        <ProductButton variant="primary" size="sm" onClick={() => void correctAll()} disabled={saving || !replacement.trim()} className="mt-2 w-full">
           {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{locale === 'zh-CN' ? '全部替换' : 'Replace all'}
-        </button>
+        </ProductButton>
       </div>}
     </div>}
   </div>;

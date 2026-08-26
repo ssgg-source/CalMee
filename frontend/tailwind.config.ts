@@ -9,13 +9,31 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
-        // Consistent color palette
-        primary: "hsl(221, 83%, 53%)", // blue-600
-        secondary: "hsl(210, 40%, 96%)", // gray-50
-        accent: "hsl(221, 83%, 53%)", // blue-600
-        destructive: "hsl(0, 84%, 60%)", // red-500
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
+        popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--popover-foreground))" },
+        primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
+        secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--secondary-foreground))" },
+        muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
+        accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--accent-foreground))" },
+        destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(var(--destructive-foreground))" },
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+      },
+      borderRadius: {
+        xl: "var(--radius-panel)",
+        lg: "var(--radius-control)",
+        md: "calc(var(--radius-control) - 2px)",
+      },
+      boxShadow: {
+        surface: "0 1px 2px rgba(43, 38, 64, 0.05), 0 8px 28px rgba(43, 38, 64, 0.055)",
+        floating: "0 18px 54px rgba(43, 38, 64, 0.16), 0 2px 10px rgba(43, 38, 64, 0.08)",
+      },
+      fontFamily: {
+        sans: ["-apple-system", "BlinkMacSystemFont", "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", "sans-serif"],
+        mono: ["SFMono-Regular", "SF Mono", "Cascadia Code", "Roboto Mono", "monospace"],
       },
       fontSize: {
         'display': ['32px', { lineHeight: '1.2', fontWeight: '700' }],

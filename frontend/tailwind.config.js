@@ -12,10 +12,13 @@ module.exports = {
 			sans: [
 				'-apple-system',
 				'BlinkMacSystemFont',
-				'"SF Pro Text"',
-				'"Segoe UI"',
+				'SF Pro Text',
+				'PingFang SC',
+				'Microsoft YaHei',
+				'Segoe UI',
 				'sans-serif'
-			]
+			],
+			mono: ['SFMono-Regular', 'SF Mono', 'Cascadia Code', 'Roboto Mono', 'monospace']
   		},
   		colors: {
   			background: 'hsl(var(--background))',
@@ -60,11 +63,16 @@ module.exports = {
   				'5': 'hsl(var(--chart-5))'
   			}
   		},
-  		borderRadius: {
-  			lg: 'var(--radius)',
-  			md: 'calc(var(--radius) - 2px)',
-  			sm: 'calc(var(--radius) - 4px)'
-  		},
+		borderRadius: {
+			xl: 'var(--radius-panel)',
+			lg: 'var(--radius-control)',
+			md: 'calc(var(--radius-control) - 2px)',
+			sm: 'calc(var(--radius-control) - 4px)'
+		},
+		boxShadow: {
+			surface: '0 1px 2px rgba(43, 38, 64, 0.05), 0 8px 28px rgba(43, 38, 64, 0.055)',
+			floating: '0 18px 54px rgba(43, 38, 64, 0.16), 0 2px 10px rgba(43, 38, 64, 0.08)'
+		},
   		keyframes: {
   			'accordion-down': {
   				from: {

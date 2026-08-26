@@ -92,8 +92,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         const result = await invoke('is_recording');
         console.log('Tauri is initialized and ready, is_recording result:', result);
       } catch (error) {
-        console.error('Tauri initialization error:', error);
-        alert('Failed to initialize recording. Please check the console for details.');
+        reportTechnicalError('recording-initialize', error);
+        toast.error(zh ? '录音功能暂不可用' : 'Recording is unavailable', {
+          description: toUserFacingError(error, locale).message,
+        });
       }
     };
     checkTauri();
@@ -238,12 +240,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // isPaused state now managed by RecordingStateContext via events
       console.log('Recording paused successfully');
     } catch (error) {
-      console.error('Failed to pause recording:', error);
-      alert('Failed to pause recording. Please check the console for details.');
+      reportTechnicalError('recording-pause', error);
+      toast.error(zh ? '暂停失败' : 'Could not pause recording', {
+        description: toUserFacingError(error, locale).message,
+      });
     } finally {
       setIsPausing(false);
     }
-  }, [isRecording, isPaused, isPausing]);
+  }, [isRecording, isPaused, isPausing, locale, zh]);
 
   const handleResumeRecording = useCallback(async () => {
     if (!isRecording || !isPaused || isResuming) return;
@@ -256,12 +260,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // isPaused state now managed by RecordingStateContext via events
       console.log('Recording resumed successfully');
     } catch (error) {
-      console.error('Failed to resume recording:', error);
-      alert('Failed to resume recording. Please check the console for details.');
+      reportTechnicalError('recording-resume', error);
+      toast.error(zh ? '继续录音失败' : 'Could not resume recording', {
+        description: toUserFacingError(error, locale).message,
+      });
     } finally {
       setIsResuming(false);
     }
-  }, [isRecording, isPaused, isResuming]);
+  }, [isRecording, isPaused, isResuming, locale, zh]);
 
   useEffect(() => {
     return () => {
@@ -496,7 +502,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             handleStartRecording();
                           }}
                           disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel}
-                          className={`relative flex h-14 w-14 items-center justify-center rounded-full text-white shadow-xl ring-8 ring-white/90 transition-colors ${isStarting || isProcessing || isValidatingModel ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
+                          className={`relative flex h-11 w-11 items-center justify-center rounded-full text-white shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 ${isStarting || isProcessing || isValidatingModel ? 'bg-muted-foreground' : 'bg-red-500 hover:bg-red-600'
                             }`}
                         >
                           {isValidatingModel || isStarting ? (
@@ -513,7 +519,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                   ) : (
                     // Recording controls (pause/resume + stop)
                     <>
-                      <div className="min-w-[70px] rounded-full bg-slate-100 px-3 py-2 text-center font-mono text-sm font-semibold tabular-nums text-slate-700">
+                      <div className="min-w-[68px] rounded-lg bg-muted px-3 py-2 text-center font-mono text-sm font-semibold tabular-nums text-foreground">
                         {formatTime(displayDuration)}
                       </div>
                       <Tooltip>
@@ -529,10 +535,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               }
                             }}
                             disabled={isPausing || isResuming || isStopping}
-                            className={`flex h-12 w-12 items-center justify-center ${isPausing || isResuming || isStopping
-                              ? 'bg-gray-200 border-2 border-gray-300 text-gray-400'
-                              : 'bg-white border-2 border-gray-300 text-gray-600 hover:border-gray-400 hover:bg-gray-50'
-                              } rounded-full transition-colors relative`}
+                            className={`relative flex h-11 w-11 items-center justify-center rounded-full border transition-colors ${isPausing || isResuming || isStopping
+                              ? 'border-border bg-muted text-muted-foreground'
+                              : 'border-border bg-card text-foreground hover:bg-muted'
+                              }`}
                           >
                             {isPaused ? <Play size={18} /> : <Pause size={18} />}
                             {(isPausing || isResuming) && (
@@ -555,8 +561,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               setShowStopConfirmation(true);
                             }}
                             disabled={isStopping || isPausing || isResuming}
-                            className={`flex h-12 w-12 items-center justify-center ${isStopping || isPausing || isResuming ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
-                              } rounded-full text-white transition-colors relative`}
+                            className={`relative flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors ${isStopping || isPausing || isResuming ? 'bg-muted-foreground' : 'bg-red-500 hover:bg-red-600'
+                              }`}
                           >
                             <Square size={18} />
                             {isStopping && (
