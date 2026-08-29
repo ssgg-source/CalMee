@@ -715,53 +715,84 @@
   padding-top: 30px;
 }
 
-/* Plus/slash insertion menu: compact choices without explanatory copy. */
+/* WPS-inspired insertion menu: compact commands, visible grouping, no cards. */
 .calmee-insert-menu {
-  display: grid;
-  width: 260px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: 5px;
-  overflow: hidden;
+  width: 276px;
+  padding: 6px;
+  overflow: hidden auto;
   color: #334155;
   background: rgba(255, 255, 255, .98);
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 14px 38px rgba(51, 65, 85, .16);
-  backdrop-filter: blur(14px);
+  border: 1px solid rgba(203, 213, 225, .86);
+  border-radius: 9px;
+  box-shadow: 0 18px 48px rgba(51, 65, 85, .17), 0 2px 8px rgba(51, 65, 85, .06);
+  backdrop-filter: blur(18px);
+}
+
+.calmee-insert-menu-section + .calmee-insert-menu-section {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid #eef2f7;
+}
+
+.calmee-insert-menu-label {
+  padding: 3px 7px 5px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .06em;
+}
+
+.calmee-insert-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
 }
 
 .calmee-insert-menu-item {
   display: flex;
-  height: 30px;
+  height: 32px;
   min-width: 0;
   align-items: center;
   gap: 6px;
-  padding: 0 7px;
+  padding: 0 7px 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   color: #475569;
   background: transparent;
   font-size: 12px;
-  line-height: 1;
+  font-weight: 500;
+  line-height: 1.1;
   text-align: left;
   cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
 }
 
 .calmee-insert-menu-item:hover,
 .calmee-insert-menu-item[aria-selected="true"] {
-  color: #6d28d9;
-  background: #f5f3ff;
+  color: #5b21b6;
+  background: #f3f0ff;
+}
+
+.calmee-insert-menu-item:active {
+  transform: scale(.985);
+}
+
+.calmee-insert-menu-item:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, .28);
+  outline-offset: -2px;
 }
 
 .calmee-insert-menu-icon {
   display: flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 4px;
 }
 
 .calmee-insert-menu-item[aria-selected="true"] .calmee-insert-menu-icon,
@@ -770,8 +801,20 @@
 }
 
 .calmee-insert-menu-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
+}
+
+.calmee-insert-menu-enter {
+  margin-left: auto;
+  color: #cbd5e1;
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.calmee-insert-menu-item[aria-selected="true"] .calmee-insert-menu-enter {
+  opacity: 1;
 }
 
 /* Selection toolbar includes block level, text attributes, colors and alignment. */
@@ -797,6 +840,56 @@
 .bn-shadcn .bn-toolbar svg {
   width: 15px;
   height: 15px;
+}
+
+/* The block-style selector is portalled by Radix. Treat it like a compact
+   desktop word-processor menu instead of a tall mobile picker. */
+.bn-select {
+  width: 204px;
+  max-height: min(360px, var(--radix-select-content-available-height)) !important;
+  padding: 4px;
+  overflow: hidden auto !important;
+  border-color: rgba(203, 213, 225, .88) !important;
+  border-radius: 9px !important;
+  background: rgba(255, 255, 255, .99) !important;
+  box-shadow: 0 18px 48px rgba(51, 65, 85, .17), 0 2px 8px rgba(51, 65, 85, .06) !important;
+}
+
+.bn-select [data-radix-select-viewport] {
+  height: auto !important;
+  min-width: 100% !important;
+  padding: 0 !important;
+}
+
+.bn-select [role="option"] {
+  min-height: 32px;
+  padding: 5px 30px 5px 8px;
+  border-radius: 5px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.bn-select [role="option"]:focus,
+.bn-select [role="option"][data-highlighted] {
+  color: #5b21b6;
+  background: #f3f0ff;
+}
+
+.bn-select [role="option"] svg {
+  width: 15px;
+  height: 15px;
+  color: #64748b;
+}
+
+.bn-select [role="option"][data-state="checked"] {
+  color: #5b21b6;
+  background: #f8f7ff;
+}
+
+.bn-select [role="option"][data-state="checked"] svg {
+  color: #7c3aed;
 }
 
 .calmee-meeting-workspace {

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { en, zh } from '@blocknote/core/locales';
 import { filterSuggestionItems } from '@blocknote/core';
 import { useCreateBlockNote } from '@blocknote/react';
@@ -42,6 +42,16 @@ interface UnifiedMarkdownEditorProps {
   compact?: boolean;
 }
 
+type FormattingFloatingOptions = NonNullable<
+  ComponentProps<typeof FormattingToolbarController>['floatingOptions']
+> & {
+  canDismiss: {
+    enabled: boolean;
+    escapeKey: boolean;
+    outsidePress: (event: MouseEvent) => boolean;
+  };
+};
+
 function CompactSideMenu(props: SideMenuProps) {
   const { locale } = useLanguage();
   const dragLabel = locale === 'zh-CN' ? '拖动内容块' : 'Drag block';
@@ -78,24 +88,59 @@ function CompactSuggestionMenu({
   selectedIndex,
   onItemClick,
 }: SuggestionMenuProps<DefaultReactSuggestionItem>) {
+  const { locale } = useLanguage();
   if (loadingState !== 'loaded' && items.length === 0) return null;
 
+  const headingItems = items.filter((item) =>
+    /heading|标题|paragraph|正文|text/i.test(item.title),
+  );
+  const structureItems = items.filter((item) => !headingItems.includes(item));
+
+  const renderItems = (sectionItems: DefaultReactSuggestionItem[]) => (
+    <div className="calmee-insert-menu-grid">
+      {sectionItems.map((item) => {
+        const index = items.indexOf(item);
+        return (
+          <button
+            key={`${item.title}-${index}`}
+            type="button"
+            role="option"
+            aria-selected={selectedIndex === index}
+            className="calmee-insert-menu-item"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onItemClick?.(item)}
+          >
+            <span className="calmee-insert-menu-icon">{item.icon}</span>
+            <span className="min-w-0 truncate">{item.title}</span>
+            <span className="calmee-insert-menu-enter" aria-hidden="true">↵</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="calmee-insert-menu" role="listbox">
-      {items.map((item, index) => (
-        <button
-          key={`${item.title}-${index}`}
-          type="button"
-          role="option"
-          aria-selected={selectedIndex === index}
-          className="calmee-insert-menu-item"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => onItemClick?.(item)}
-        >
-          <span className="calmee-insert-menu-icon">{item.icon}</span>
-          <span className="truncate">{item.title}</span>
-        </button>
-      ))}
+    <div
+      className="calmee-insert-menu"
+      role="listbox"
+      aria-label={locale === 'zh-CN' ? '插入内容' : 'Insert content'}
+    >
+      {headingItems.length > 0 && (
+        <section className="calmee-insert-menu-section">
+          <div className="calmee-insert-menu-label">
+            {locale === 'zh-CN' ? '文本结构' : 'Text structure'}
+          </div>
+          {renderItems(headingItems)}
+        </section>
+      )}
+      {structureItems.length > 0 && (
+        <section className="calmee-insert-menu-section">
+          <div className="calmee-insert-menu-label">
+            {locale === 'zh-CN' ? '列表与引用' : 'Lists & quote'}
+          </div>
+          {renderItems(structureItems)}
+        </section>
+      )}
     </div>
   );
 }
@@ -125,16 +170,47 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
     heading: { levels: [1, 2, 3, 4] },
   }, [documentKey, locale]);
 
-  const compactBlockTypeItems = useMemo(
-    () => blockTypeSelectItems(editor.dictionary).filter((item) => {
-      if (item.type === 'heading') {
-        const level = Number(item.props?.level || 0);
-        return !item.props?.isToggleable && level >= 1 && level <= 4;
-      }
-      return ['paragraph', 'quote', 'bulletListItem', 'numberedListItem', 'checkListItem'].includes(item.type);
-    }),
-    [editor],
-  );
+  // BlockNote's public controller type currently omits `canDismiss`, although
+  // the underlying positioning hook supports it. Radix mounts the style menu
+  // in a portal, so explicitly keep that portal inside the editing interaction.
+  const formattingFloatingOptions: FormattingFloatingOptions = useMemo(() => ({
+    canDismiss: {
+      enabled: true,
+      escapeKey: true,
+      outsidePress: (event: MouseEvent) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return true;
+        if (target.closest('.bn-select')) return false;
+        return !editor.domElement?.parentElement?.contains(target);
+      },
+    },
+  }), [editor]);
+
+  const compactBlockTypeItems = useMemo(() => {
+    const names = locale === 'zh-CN'
+      ? {
+          paragraph: '正文', heading1: '标题 1', heading2: '标题 2', heading3: '标题 3', heading4: '标题 4',
+          bulletListItem: '项目符号', numberedListItem: '编号列表', checkListItem: '待办事项', quote: '引用',
+        }
+      : {
+          paragraph: 'Body text', heading1: 'Heading 1', heading2: 'Heading 2', heading3: 'Heading 3', heading4: 'Heading 4',
+          bulletListItem: 'Bulleted list', numberedListItem: 'Numbered list', checkListItem: 'Checklist', quote: 'Quote',
+        };
+    return blockTypeSelectItems(editor.dictionary)
+      .filter((item) => {
+        if (item.type === 'heading') {
+          const level = Number(item.props?.level || 0);
+          return !item.props?.isToggleable && level >= 1 && level <= 4;
+        }
+        return ['paragraph', 'quote', 'bulletListItem', 'numberedListItem', 'checkListItem'].includes(item.type);
+      })
+      .map((item) => {
+        const key = item.type === 'heading'
+          ? `heading${Number(item.props?.level || 1)}`
+          : item.type;
+        return { ...item, name: names[key as keyof typeof names] || item.name };
+      });
+  }, [editor, locale]);
 
   const compactSlashItems = useMemo(() => {
     const menu = editor.dictionary.slash_menu;
@@ -327,6 +403,7 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
           suggestionMenuComponent={CompactSuggestionMenu}
         />
         <FormattingToolbarController
+          floatingOptions={formattingFloatingOptions}
           formattingToolbar={() => (
             <FormattingToolbar>
               {getFormattingToolbarItems(compactBlockTypeItems)}
