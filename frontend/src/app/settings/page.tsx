@@ -1,20 +1,31 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { invoke } from '@tauri-apps/api/core';
-import { TranscriptSettings } from '@/components/TranscriptSettings';
-import { RecordingSettings } from '@/components/RecordingSettings';
-import { PreferenceSettings } from '@/components/PreferenceSettings';
-import { SummaryModelSettings } from '@/components/SummaryModelSettings';
-import { CalendarSettings } from '@/components/CalendarSettings';
-import { DataMigrationSettings } from '@/components/DataMigrationSettings';
-import { DedaoSettings } from '@/components/DedaoSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { ProductPage, ProductPageContent, ProductPageHeader } from '@/components/layout/ProductPage';
+
+function SettingsPaneLoading() {
+  return (
+    <div className="space-y-4" aria-label="Loading settings">
+      <div className="h-5 w-36 animate-pulse rounded-md bg-muted" />
+      <div className="h-16 animate-pulse rounded-xl bg-muted/70" />
+      <div className="h-32 animate-pulse rounded-xl bg-muted/55" />
+    </div>
+  );
+}
+
+const PreferenceSettings = dynamic(() => import('@/components/PreferenceSettings').then(module => module.PreferenceSettings), { loading: SettingsPaneLoading });
+const RecordingSettings = dynamic(() => import('@/components/RecordingSettings').then(module => module.RecordingSettings), { loading: SettingsPaneLoading });
+const TranscriptSettings = dynamic(() => import('@/components/TranscriptSettings').then(module => module.TranscriptSettings), { loading: SettingsPaneLoading });
+const SummaryModelSettings = dynamic(() => import('@/components/SummaryModelSettings').then(module => module.SummaryModelSettings), { loading: SettingsPaneLoading });
+const CalendarSettings = dynamic(() => import('@/components/CalendarSettings').then(module => module.CalendarSettings), { loading: SettingsPaneLoading });
+const DedaoSettings = dynamic(() => import('@/components/DedaoSettings').then(module => module.DedaoSettings), { loading: SettingsPaneLoading });
+const DataMigrationSettings = dynamic(() => import('@/components/DataMigrationSettings').then(module => module.DataMigrationSettings), { loading: SettingsPaneLoading });
 
 // Tabs configuration (constant)
 const TABS = [
@@ -38,26 +49,6 @@ export default function SettingsPage() {
     const requested = new URLSearchParams(window.location.search).get('tab');
     if (requested && TABS.some(tab => tab.value === requested)) setActiveTab(requested);
   }, []);
-
-  // Load saved transcript configuration on mount
-  useEffect(() => {
-    const loadTranscriptConfig = async () => {
-      try {
-        const config = await invoke('api_get_transcript_config') as any;
-        if (config) {
-          console.log('Loaded saved transcript config:', config);
-          setTranscriptModelConfig({
-            provider: config.provider || 'localWhisper',
-            model: config.model || 'large-v3',
-            apiKey: config.apiKey || null
-          });
-        }
-      } catch (error) {
-        console.error('Failed to load transcript config:', error);
-      }
-    };
-    loadTranscriptConfig();
-  }, [setTranscriptModelConfig]);
 
   return (
     <ProductPage>

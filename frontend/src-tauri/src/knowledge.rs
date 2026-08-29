@@ -2128,25 +2128,46 @@ pub async fn api_assign_meeting_speaker<R: Runtime>(
             .bind(&meeting_id).bind(transcript_id).bind(&person_id).bind(&now).bind(&now)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
     }
-    let mut voice_stored = false;
-    if remember_voice {
-        if let Some(embedding)=sqlx::query_scalar::<_,Option<String>>("SELECT embedding FROM meeting_speaker_assignments WHERE meeting_id=? AND local_speaker=?")
-            .bind(&meeting_id).bind(&local_speaker).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?.flatten() {
-            let duration = speaker_sample_duration(&mut tx, &meeting_id, &local_speaker).await?;
-            let quality = voiceprint_quality(duration);
-            // Rebinding transfers the active enrollment sample. Historic rows
-            // remain available for audit but can no longer influence matching.
-            sqlx::query("UPDATE voiceprints SET status='retired',updated_at=? WHERE source_meeting_id=? AND source_speaker=? AND status IN ('confirmed','trusted')")
-                .bind(&now).bind(&meeting_id).bind(&local_speaker).execute(&mut *tx).await.map_err(|e|e.to_string())?;
-            sqlx::query("INSERT INTO voiceprints (id,person_id,embedding,source_meeting_id,source_speaker,quality,sample_duration,status,confirmation_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'confirmed','manual_batch',?,?)")
-                .bind(format!("voiceprint-{}",Uuid::new_v4())).bind(&person_id).bind(embedding).bind(&meeting_id).bind(&local_speaker).bind(quality).bind(duration).bind(&now).bind(&now).execute(&mut *tx).await.map_err(|e|e.to_string())?;
-            voice_stored = true;
-        }
-    }
+    let voice_stored = if remember_voice {
+        enroll_meeting_speaker_voiceprint(&mut tx, &meeting_id, &local_speaker, &person_id, &now)
+            .await?
+    } else {
+        false
+    };
     sqlx::query("INSERT INTO voiceprint_audit_log (id,meeting_id,local_speaker,previous_person_id,person_id,action,confidence,created_at) VALUES (?,?,?,?,?,'manual_batch_binding',1.0,?)")
         .bind(format!("voiceprint-audit-{}",Uuid::new_v4())).bind(&meeting_id).bind(&local_speaker).bind(previous_person_id).bind(&person_id).bind(&now).execute(&mut *tx).await.map_err(|e|e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(voice_stored)
+}
+
+async fn enroll_meeting_speaker_voiceprint(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    meeting_id: &str,
+    local_speaker: &str,
+    person_id: &str,
+    now: &str,
+) -> Result<bool, String> {
+    let assignment = sqlx::query("SELECT embedding,embedding_model_id,embedding_model_revision,embedding_dimension FROM meeting_speaker_assignments WHERE meeting_id=? AND local_speaker=?")
+        .bind(meeting_id).bind(local_speaker).fetch_optional(&mut **tx).await.map_err(|e|e.to_string())?;
+    let Some(assignment) = assignment else {
+        return Ok(false);
+    };
+    let Some(embedding) = assignment.get::<Option<String>, _>("embedding") else {
+        return Ok(false);
+    };
+    let duration = speaker_sample_duration(tx, meeting_id, local_speaker).await?;
+    let quality = voiceprint_quality(duration);
+    // Rebinding transfers the active enrollment sample. Historic rows remain
+    // available for audit but can no longer influence matching.
+    sqlx::query("UPDATE voiceprints SET status='retired',updated_at=? WHERE source_meeting_id=? AND source_speaker=? AND status IN ('confirmed','trusted')")
+        .bind(now).bind(meeting_id).bind(local_speaker).execute(&mut **tx).await.map_err(|e|e.to_string())?;
+    sqlx::query("INSERT INTO voiceprints (id,person_id,embedding,source_meeting_id,source_speaker,quality,sample_duration,status,confirmation_source,created_at,updated_at,embedding_model_id,embedding_model_revision,embedding_dimension) VALUES (?,?,?,?,?,?,?,'confirmed','manual_batch',?,?,?,?,?)")
+        .bind(format!("voiceprint-{}",Uuid::new_v4())).bind(person_id).bind(embedding).bind(meeting_id).bind(local_speaker).bind(quality).bind(duration).bind(now).bind(now)
+        .bind(assignment.get::<Option<String>,_>("embedding_model_id"))
+        .bind(assignment.get::<Option<String>,_>("embedding_model_revision"))
+        .bind(assignment.get::<Option<i64>,_>("embedding_dimension"))
+        .execute(&mut **tx).await.map_err(|e|e.to_string())?;
+    Ok(true)
 }
 
 async fn speaker_sample_duration(
@@ -2193,13 +2214,39 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceprintEmbeddingModel {
+    pub id: String,
+    pub revision: String,
+    pub dimension: usize,
+}
+
+fn embedding_models_compatible(
+    expected: Option<&VoiceprintEmbeddingModel>,
+    stored_id: Option<&str>,
+    stored_revision: Option<&str>,
+    stored_dimension: Option<usize>,
+    actual_dimension: usize,
+) -> bool {
+    match expected {
+        Some(model) => {
+            stored_id == Some(model.id.as_str())
+                && stored_revision == Some(model.revision.as_str())
+                && stored_dimension == Some(model.dimension)
+                && actual_dimension == model.dimension
+        }
+        None => stored_revision.is_none() && stored_dimension.is_none(),
+    }
+}
+
 pub async fn store_meeting_speaker_embeddings(
     pool: &SqlitePool,
     meeting_id: &str,
     embeddings: &HashMap<String, Vec<f32>>,
+    model: Option<&VoiceprintEmbeddingModel>,
 ) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
-    let profiles = sqlx::query("SELECT v.person_id,v.embedding,v.quality FROM voiceprints v JOIN people p ON p.id=v.person_id WHERE p.auto_identify=1 AND v.status IN ('confirmed','trusted')")
+    let profiles = sqlx::query("SELECT v.person_id,v.embedding,v.quality,v.embedding_model_id,v.embedding_model_revision,v.embedding_dimension FROM voiceprints v JOIN people p ON p.id=v.person_id WHERE p.auto_identify=1 AND v.status IN ('confirmed','trusted')")
         .fetch_all(pool).await.map_err(|e|e.to_string())?;
     let mut weighted_profiles: HashMap<String, (Vec<f32>, f32)> = HashMap::new();
     for row in &profiles {
@@ -2207,6 +2254,20 @@ pub async fn store_meeting_speaker_embeddings(
         let sample: Vec<f32> =
             serde_json::from_str(&row.get::<String, _>("embedding")).unwrap_or_default();
         if sample.is_empty() {
+            continue;
+        }
+        let stored_id: Option<String> = row.get("embedding_model_id");
+        let stored_revision: Option<String> = row.get("embedding_model_revision");
+        let stored_dimension = row
+            .get::<Option<i64>, _>("embedding_dimension")
+            .and_then(|value| usize::try_from(value).ok());
+        if !embedding_models_compatible(
+            model,
+            stored_id.as_deref(),
+            stored_revision.as_deref(),
+            stored_dimension,
+            sample.len(),
+        ) {
             continue;
         }
         let quality = row.get::<f64, _>("quality").clamp(0.25, 1.0) as f32;
@@ -2238,6 +2299,11 @@ pub async fn store_meeting_speaker_embeddings(
         })
         .collect();
     for (speaker, embedding) in embeddings {
+        if model.is_some_and(|metadata| embedding.len() != metadata.dimension) {
+            return Err(
+                "Speaker embedding dimension does not match its model metadata".to_string(),
+            );
+        }
         let json = serde_json::to_string(embedding).map_err(|e| e.to_string())?;
         let mut ranked: Vec<(String, f32)> = profile_centroids
             .iter()
@@ -2258,8 +2324,10 @@ pub async fn store_meeting_speaker_embeddings(
         } else {
             "unknown"
         };
-        sqlx::query("INSERT INTO meeting_speaker_assignments (meeting_id,local_speaker,person_id,candidate_person_id,confidence,runner_up_confidence,match_state,embedding,confirmed,updated_at) VALUES (?,?,?,?,?,?,?,?,0,?) ON CONFLICT(meeting_id,local_speaker) DO UPDATE SET person_id=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.person_id ELSE excluded.person_id END,candidate_person_id=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN NULL ELSE excluded.candidate_person_id END,confidence=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.confidence ELSE excluded.confidence END,runner_up_confidence=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.runner_up_confidence ELSE excluded.runner_up_confidence END,match_state=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN 'confirmed' ELSE excluded.match_state END,embedding=excluded.embedding,updated_at=excluded.updated_at")
-            .bind(meeting_id).bind(speaker).bind(high_confidence.map(|c|&c.0)).bind(candidate.map(|c|&c.0)).bind(top.map(|c|c.1 as f64)).bind(runner_up.map(|v|v as f64)).bind(match_state).bind(json).bind(&now).execute(pool).await.map_err(|e|e.to_string())?;
+        sqlx::query("INSERT INTO meeting_speaker_assignments (meeting_id,local_speaker,person_id,candidate_person_id,confidence,runner_up_confidence,match_state,embedding,embedding_model_id,embedding_model_revision,embedding_dimension,confirmed,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?) ON CONFLICT(meeting_id,local_speaker) DO UPDATE SET person_id=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.person_id ELSE excluded.person_id END,candidate_person_id=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN NULL ELSE excluded.candidate_person_id END,confidence=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.confidence ELSE excluded.confidence END,runner_up_confidence=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN meeting_speaker_assignments.runner_up_confidence ELSE excluded.runner_up_confidence END,match_state=CASE WHEN meeting_speaker_assignments.confirmed=1 THEN 'confirmed' ELSE excluded.match_state END,embedding=excluded.embedding,embedding_model_id=excluded.embedding_model_id,embedding_model_revision=excluded.embedding_model_revision,embedding_dimension=excluded.embedding_dimension,updated_at=excluded.updated_at")
+            .bind(meeting_id).bind(speaker).bind(high_confidence.map(|c|&c.0)).bind(candidate.map(|c|&c.0)).bind(top.map(|c|c.1 as f64)).bind(runner_up.map(|v|v as f64)).bind(match_state).bind(json)
+            .bind(model.map(|value| value.id.as_str())).bind(model.map(|value| value.revision.as_str())).bind(model.map(|value| value.dimension as i64))
+            .bind(&now).execute(pool).await.map_err(|e|e.to_string())?;
     }
     Ok(())
 }
@@ -3719,6 +3787,119 @@ mod tests {
             text,
             "\u{55ef}\u{ff0c}\u{6211}\u{4eec}\u{4e0b}\u{5468}\u{53d1}\u{5e03}\u{3002}"
         );
+    }
+
+    #[test]
+    fn versioned_voiceprints_only_match_the_exact_model_revision() {
+        let model = VoiceprintEmbeddingModel {
+            id: "cam++".into(),
+            revision: "sha256:v1".into(),
+            dimension: 192,
+        };
+        assert!(embedding_models_compatible(
+            Some(&model),
+            Some("cam++"),
+            Some("sha256:v1"),
+            Some(192),
+            192,
+        ));
+        assert!(!embedding_models_compatible(
+            Some(&model),
+            Some("cam++"),
+            Some("sha256:v2"),
+            Some(192),
+            192,
+        ));
+        assert!(!embedding_models_compatible(
+            Some(&model),
+            None,
+            None,
+            None,
+            192,
+        ));
+    }
+
+    #[test]
+    fn legacy_voiceprints_remain_isolated_from_versioned_embeddings() {
+        assert!(embedding_models_compatible(None, None, None, None, 192));
+        assert!(!embedding_models_compatible(
+            None,
+            Some("cam++"),
+            Some("sha256:v1"),
+            Some(192),
+            192,
+        ));
+    }
+
+    #[tokio::test]
+    async fn versioned_embedding_is_stored_and_only_matches_same_revision() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO meetings(id,title,created_at,updated_at) VALUES('meeting-1','One',?,?),('meeting-2','Two',?,?)")
+            .bind(&now).bind(&now).bind(&now).bind(&now).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO people(id,name,created_at,updated_at) VALUES('person-1','Test person',?,?)")
+            .bind(&now).bind(&now).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO voiceprints(id,person_id,embedding,quality,status,confirmation_source,created_at,embedding_model_id,embedding_model_revision,embedding_dimension) VALUES('voice-1','person-1','[1.0,0.0]',1.0,'confirmed','test',?,'cam++','sha256:v1',2)")
+            .bind(&now).execute(&pool).await.unwrap();
+
+        let matching_model = VoiceprintEmbeddingModel {
+            id: "cam++".into(),
+            revision: "sha256:v1".into(),
+            dimension: 2,
+        };
+        store_meeting_speaker_embeddings(
+            &pool,
+            "meeting-1",
+            &HashMap::from([("Speaker 1".into(), vec![1.0, 0.0])]),
+            Some(&matching_model),
+        )
+        .await
+        .unwrap();
+        let matched: Option<String> = sqlx::query_scalar("SELECT person_id FROM meeting_speaker_assignments WHERE meeting_id='meeting-1' AND local_speaker='Speaker 1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(matched.as_deref(), Some("person-1"));
+        sqlx::query("INSERT INTO transcripts(id,meeting_id,transcript,timestamp,duration) VALUES('transcript-1','meeting-1','[Speaker 1] hello','00:00',12.0)")
+            .execute(&pool).await.unwrap();
+        let mut enrollment_tx = pool.begin().await.unwrap();
+        assert!(enroll_meeting_speaker_voiceprint(
+            &mut enrollment_tx,
+            "meeting-1",
+            "Speaker 1",
+            "person-1",
+            &now,
+        )
+        .await
+        .unwrap());
+        enrollment_tx.commit().await.unwrap();
+        let enrolled_model: (Option<String>, Option<String>, Option<i64>) = sqlx::query_as("SELECT embedding_model_id,embedding_model_revision,embedding_dimension FROM voiceprints WHERE source_meeting_id='meeting-1' AND source_speaker='Speaker 1' AND status='confirmed'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(enrolled_model.0.as_deref(), Some("cam++"));
+        assert_eq!(enrolled_model.1.as_deref(), Some("sha256:v1"));
+        assert_eq!(enrolled_model.2, Some(2));
+
+        let incompatible_model = VoiceprintEmbeddingModel {
+            revision: "sha256:v2".into(),
+            ..matching_model
+        };
+        store_meeting_speaker_embeddings(
+            &pool,
+            "meeting-2",
+            &HashMap::from([("Speaker 1".into(), vec![1.0, 0.0])]),
+            Some(&incompatible_model),
+        )
+        .await
+        .unwrap();
+        let unmatched: Option<String> = sqlx::query_scalar("SELECT person_id FROM meeting_speaker_assignments WHERE meeting_id='meeting-2' AND local_speaker='Speaker 1'")
+            .fetch_one(&pool).await.unwrap();
+        assert!(unmatched.is_none());
+        let revision: Option<String> = sqlx::query_scalar("SELECT embedding_model_revision FROM meeting_speaker_assignments WHERE meeting_id='meeting-2' AND local_speaker='Speaker 1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(revision.as_deref(), Some("sha256:v2"));
     }
 
     #[test]

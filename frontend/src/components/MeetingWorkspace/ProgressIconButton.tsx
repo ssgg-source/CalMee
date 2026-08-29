@@ -26,10 +26,11 @@ export function ProgressIconButton({
   className?: string;
 }) {
   const running = progress != null;
+  const indeterminate = running && progress < 0;
   const value = Math.max(0, Math.min(100, progress || 0));
   const circumference = 2 * Math.PI * 11;
   const tooltip = running
-    ? `${progressText || title} · ${Math.round(value)}%${onCancel ? " · 双击取消 / Double-click to cancel" : ""}`
+    ? `${progressText || title}${indeterminate ? "" : ` · ${Math.round(value)}%`}${onCancel ? " · 双击取消 / Double-click to cancel" : ""}`
     : title;
   return (
     <Button
@@ -59,7 +60,7 @@ export function ProgressIconButton({
       {running ? (
         <>
           <svg
-            className="pointer-events-none absolute left-1/2 top-1/2 !h-7 !w-7 -translate-x-1/2 -translate-y-1/2 -rotate-90"
+            className={cn("pointer-events-none absolute left-1/2 top-1/2 !h-7 !w-7 -translate-x-1/2 -translate-y-1/2 -rotate-90", indeterminate && "animate-spin")}
             viewBox="0 0 28 28"
           >
             <circle
@@ -79,13 +80,11 @@ export function ProgressIconButton({
               stroke="currentColor"
               strokeWidth="2.2"
               strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={circumference * (1 - value / 100)}
+              strokeDasharray={indeterminate ? `${circumference * .25} ${circumference * .75}` : circumference}
+              strokeDashoffset={indeterminate ? 0 : circumference * (1 - value / 100)}
             />
           </svg>
-          <span className="relative z-10 flex h-full w-full items-center justify-center text-[9px] font-semibold leading-none tabular-nums">
-            {Math.round(value)}
-          </span>
+          {!indeterminate && <span className="relative z-10 flex h-full w-full items-center justify-center text-[9px] font-semibold leading-none tabular-nums">{Math.round(value)}</span>}
         </>
       ) : (
         icon

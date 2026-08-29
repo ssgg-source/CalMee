@@ -21,8 +21,9 @@ const count = pattern => source.match(pattern)?.length ?? 0;
 // threshold as another product area moves onto the shared feedback helper.
 const checks = [
   { name: 'raw errors placed directly in UI descriptions', count: count(/description\s*:\s*(?:String\s*\(|error\s+instanceof\s+Error|payload\.error|job\.error|err\.message)/g), limit: 0 },
+  { name: 'backend response messages used as toast copy', count: count(/toast\.(?:success|error|info|warning)\(\s*(?:result\.message|await\s+invoke)/g), limit: 0 },
   { name: 'browser alert calls', count: count(/\balert\s*\(/g), limit: 0 },
-  { name: 'legacy literal translations', count: count(/\blt\s*\(/g), limit: 317 },
+  { name: 'legacy literal translations', count: count(/\blt\s*\(/g), limit: 314 },
 ];
 
 let failed = false;

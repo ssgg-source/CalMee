@@ -44,11 +44,11 @@ export function MeetingTabs(){
   useEffect(()=>{setPendingUrl(null);},[pathname,activeId]);
   useEffect(()=>{router.prefetch(baseRoute);tabs.forEach(tab=>router.prefetch(meetingUrl(tab.id,tab.source)));},[router,baseRoute,tabs]);
   useEffect(()=>{let live=true;void Promise.all(tabs.flatMap(tab=>[
-    invoke<any>('get_retranscription_status_command',{meetingId:tab.id}).then(job=>{if(live&&job.status==='processing')setTaskProgress(current=>({...current,[tab.id]:{...current[tab.id],asr:job.progress?.progress_percentage||1}}));}).catch(()=>undefined),
+    invoke<any>('get_retranscription_status_command',{meetingId:tab.id}).then(job=>{if(live&&job.status==='processing')setTaskProgress(current=>({...current,[tab.id]:{...current[tab.id],asr:job.progress?.determinate===false?-1:(job.progress?.progress_percentage||1)}}));}).catch(()=>undefined),
     invoke<any>('api_get_transcript_refinement_status',{meetingId:tab.id}).then(job=>{if(live&&job.status==='processing')setTaskProgress(current=>({...current,[tab.id]:{...current[tab.id],ai:job.progress?.determinate?(job.progress.percentage||1):-1}}));}).catch(()=>undefined),
   ]));return()=>{live=false};},[tabs]);
   useEffect(()=>{let disposed=false;const cleanups:Array<()=>void>=[];void Promise.all([
-    listen<any>('retranscription-progress',event=>setTaskProgress(current=>({...current,[event.payload.meeting_id]:{...current[event.payload.meeting_id],asr:event.payload.progress_percentage||1}}))),
+    listen<any>('retranscription-progress',event=>setTaskProgress(current=>({...current,[event.payload.meeting_id]:{...current[event.payload.meeting_id],asr:event.payload.determinate===false?-1:(event.payload.progress_percentage||1)}}))),
     listen<any>('retranscription-complete',event=>setTaskProgress(current=>({...current,[event.payload.meeting_id]:{...current[event.payload.meeting_id],asr:undefined}}))),
     listen<any>('retranscription-error',event=>setTaskProgress(current=>({...current,[event.payload.meeting_id]:{...current[event.payload.meeting_id],asr:undefined}}))),
     listen<any>('transcript-refinement-progress',event=>setTaskProgress(current=>({...current,[event.payload.meetingId]:{...current[event.payload.meetingId],ai:event.payload.determinate?(event.payload.percentage||1):-1}}))),

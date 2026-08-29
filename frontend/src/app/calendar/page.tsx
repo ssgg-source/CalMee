@@ -20,6 +20,46 @@ type CalendarCollection={id:string;source:string;accountKey:string;href:string;n
 type CalendarEvent={id:string;source:string;externalId:string;calendarName?:string;title:string;startAt:string;endAt?:string;location?:string;notes?:string;meetingId?:string;calendarId?:string;href?:string;etag?:string;allDay:boolean};
 type EditorState={id?:string;calendarId:string;title:string;start:string;end:string;location:string;notes:string;allDay:boolean;meetingId:string};
 type EditorAnchor={x:number;y:number};
+type CalendarRangeData={calendars:CalendarCollection[];events:CalendarEvent[]};
+
+const calendarRangeCache=new Map<string,CalendarRangeData>();
+const calendarRangeRequests=new Map<string,Promise<CalendarRangeData>>();
+const CALENDAR_CACHE_LIMIT=12;
+const calendarRangeKey=(start:Date,end:Date)=>`${start.toISOString()}::${end.toISOString()}`;
+const cacheCalendarRange=(key:string,data:CalendarRangeData)=>{
+  calendarRangeCache.delete(key);
+  calendarRangeCache.set(key,data);
+  while(calendarRangeCache.size>CALENDAR_CACHE_LIMIT){
+    const oldest=calendarRangeCache.keys().next().value;
+    if(typeof oldest!=='string')break;
+    calendarRangeCache.delete(oldest);
+  }
+};
+const fetchCalendarRange=(start:Date,end:Date,force=false)=>{
+  const key=calendarRangeKey(start,end);
+  if(force)calendarRangeCache.clear();
+  if(!force){
+    const cached=calendarRangeCache.get(key);
+    if(cached)return Promise.resolve(cached);
+    const pending=calendarRangeRequests.get(key);
+    if(pending)return pending;
+  }
+  const request=Promise.all([
+    invoke<CalendarCollection[]>('api_get_calendar_collections'),
+    invoke<CalendarEvent[]>('api_get_calendar_events',{startAt:start.toISOString(),endAt:end.toISOString()}),
+  ]).then(([calendars,events])=>{
+    const data={calendars,events};
+    cacheCalendarRange(key,data);
+    return data;
+  }).finally(()=>{if(calendarRangeRequests.get(key)===request)calendarRangeRequests.delete(key);});
+  calendarRangeRequests.set(key,request);
+  return request;
+};
+
+const localDayKey=(value:Date|string)=>{
+  const date=new Date(value);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+};
 
 const localValue=(value:Date|string)=>{const date=new Date(value);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);};
 const editorFrom=(event:CalendarEvent):EditorState=>({id:event.id,calendarId:event.calendarId||'',title:event.title,start:localValue(event.startAt),end:localValue(event.endAt||addDays(new Date(event.startAt),0)),location:event.location||'',notes:event.notes||'',allDay:event.allDay,meetingId:event.meetingId||''});
@@ -35,8 +75,13 @@ export default function CalendarPage(){
   const [inboxCollapsed,setInboxCollapsed]=useState(()=>typeof window!=='undefined'&&localStorage.getItem('calmee-calendar-inbox-collapsed')==='true');
   const [cursor,setCursor]=useState(new Date());
   const [selectedDate,setSelectedDate]=useState(new Date());
-  const [calendars,setCalendars]=useState<CalendarCollection[]>([]);
-  const [events,setEvents]=useState<CalendarEvent[]>([]);
+  const range=useMemo(()=>view==='month'
+    ?{start:startOfWeek(startOfMonth(cursor),{weekStartsOn:1}),end:endOfWeek(endOfMonth(cursor),{weekStartsOn:1})}
+    :view==='week'?{start:startOfWeek(cursor,{weekStartsOn:1}),end:endOfWeek(cursor,{weekStartsOn:1})}
+    :{start:startOfDay(cursor),end:endOfDay(cursor)},[cursor,view]);
+  const initialRangeData=calendarRangeCache.get(calendarRangeKey(range.start,range.end));
+  const [calendars,setCalendars]=useState<CalendarCollection[]>(()=>initialRangeData?.calendars||[]);
+  const [events,setEvents]=useState<CalendarEvent[]>(()=>initialRangeData?.events||[]);
   const [syncing,setSyncing]=useState(false);
   const [editor,setEditor]=useState<EditorState|null>(null);
   const [editorAnchor,setEditorAnchor]=useState<EditorAnchor|null>(null);
@@ -46,15 +91,14 @@ export default function CalendarPage(){
   const [selectedMeetingIds,setSelectedMeetingIds]=useState<Set<string>>(new Set());
   const calendarScrollRef=useRef<HTMLDivElement|null>(null);
 
-  const range=useMemo(()=>view==='month'
-    ?{start:startOfWeek(startOfMonth(cursor),{weekStartsOn:1}),end:endOfWeek(endOfMonth(cursor),{weekStartsOn:1})}
-    :view==='week'?{start:startOfWeek(cursor,{weekStartsOn:1}),end:endOfWeek(cursor,{weekStartsOn:1})}
-    :{start:startOfDay(cursor),end:endOfDay(cursor)},[cursor,view]);
   const visibleCalendarIds=useMemo(()=>new Set(calendars.filter(item=>item.enabled).map(item=>item.id)),[calendars]);
   const visibleEvents=useMemo(()=>events.filter(event=>event.calendarId?visibleCalendarIds.has(event.calendarId):true),[events,visibleCalendarIds]);
-  const colorFor=(event:CalendarEvent)=>calendars.find(item=>item.id===event.calendarId)?.color||'#0A84FF';
-  const eventsForDay=(date:Date)=>visibleEvents.filter(event=>isSameDay(new Date(event.startAt),date));
-  const meetingsForDay=(date:Date)=>meetings.filter(meeting=>meeting.calendarEventId&&meeting.meetingStartTime&&isSameDay(new Date(meeting.meetingStartTime),date));
+  const calendarColors=useMemo(()=>new Map(calendars.map(item=>[item.id,item.color])),[calendars]);
+  const eventsByDay=useMemo(()=>visibleEvents.reduce<Map<string,CalendarEvent[]>>((map,event)=>{const key=localDayKey(event.startAt);const items=map.get(key);if(items)items.push(event);else map.set(key,[event]);return map;},new Map()),[visibleEvents]);
+  const meetingsByDay=useMemo(()=>meetings.reduce<Map<string,typeof meetings>>((map,meeting)=>{if(!meeting.calendarEventId||!meeting.meetingStartTime)return map;const key=localDayKey(meeting.meetingStartTime);const items=map.get(key);if(items)items.push(meeting);else map.set(key,[meeting]);return map;},new Map()),[meetings]);
+  const colorFor=(event:CalendarEvent)=>calendarColors.get(event.calendarId||'')||'#0A84FF';
+  const eventsForDay=(date:Date)=>eventsByDay.get(localDayKey(date))||[];
+  const meetingsForDay=(date:Date)=>meetingsByDay.get(localDayKey(date))||[];
   const writableCalendars=calendars.filter(item=>!item.readOnly&&item.source==='caldav');
   const unlinkedMeetings=useMemo(()=>meetings.filter(meeting=>!meeting.calendarEventId).sort((a,b)=>new Date(b.meetingStartTime||b.createdAt||0).getTime()-new Date(a.meetingStartTime||a.createdAt||0).getTime()),[meetings]);
 
@@ -74,18 +118,18 @@ export default function CalendarPage(){
     return()=>window.cancelAnimationFrame(frame);
   },[view]);
 
-  const load=async()=>{try{const [calendarRows,eventRows]=await Promise.all([invoke<CalendarCollection[]>('api_get_calendar_collections'),invoke<CalendarEvent[]>('api_get_calendar_events',{startAt:range.start.toISOString(),endAt:range.end.toISOString()})]);setCalendars(calendarRows);setEvents(eventRows);}catch(error){showError(t('calendar.loadFailed'),error);}};
+  const load=async(force=false)=>{try{const data=await fetchCalendarRange(range.start,range.end,force);setCalendars(data.calendars);setEvents(data.events);}catch(error){showError(t('calendar.loadFailed'),error);}};
   useEffect(()=>{void load();},[range.start.getTime(),range.end.getTime()]);
 
-  const sync=async()=>{setSyncing(true);try{const result=await invoke<any>('api_sync_calendars',{startAt:range.start.toISOString(),endAt:range.end.toISOString()});await load();toast.success(t('calendar.syncComplete',{count:result.local+result.caldav}));if(result.warnings?.length){reportTechnicalError('calendar-sync-warnings',result.warnings);toast.warning(t('calendar.partialSync'),{description:toUserFacingError(result.warnings.join('; '),locale).message});}}catch(error){showError(t('calendar.syncFailed'),error);}finally{setSyncing(false);}};
-  const toggleCalendar=async(calendar:CalendarCollection)=>{const enabled=!calendar.enabled;setCalendars(items=>items.map(item=>item.id===calendar.id?{...item,enabled}:item));try{await invoke('api_set_calendar_enabled',{calendarId:calendar.id,enabled});}catch(error){setCalendars(items=>items.map(item=>item.id===calendar.id?{...item,enabled:calendar.enabled}:item));showError(t('calendar.displaySaveFailed'),error);}};
+  const sync=async()=>{setSyncing(true);try{const result=await invoke<any>('api_sync_calendars',{startAt:range.start.toISOString(),endAt:range.end.toISOString()});await load(true);toast.success(t('calendar.syncComplete',{count:result.local+result.caldav}));if(result.warnings?.length){reportTechnicalError('calendar-sync-warnings',result.warnings);toast.warning(t('calendar.partialSync'),{description:toUserFacingError(result.warnings.join('; '),locale).message});}}catch(error){showError(t('calendar.syncFailed'),error);}finally{setSyncing(false);}};
+  const toggleCalendar=async(calendar:CalendarCollection)=>{const enabled=!calendar.enabled;const update=(items:CalendarCollection[])=>items.map(item=>item.id===calendar.id?{...item,enabled}:item);setCalendars(update);Array.from(calendarRangeCache.entries()).forEach(([key,data])=>cacheCalendarRange(key,{...data,calendars:update(data.calendars)}));try{await invoke('api_set_calendar_enabled',{calendarId:calendar.id,enabled});}catch(error){const rollback=(items:CalendarCollection[])=>items.map(item=>item.id===calendar.id?{...item,enabled:calendar.enabled}:item);setCalendars(rollback);Array.from(calendarRangeCache.entries()).forEach(([key,data])=>cacheCalendarRange(key,{...data,calendars:rollback(data.calendars)}));showError(t('calendar.displaySaveFailed'),error);}};
   const anchorFor=(element:HTMLElement):EditorAnchor=>{const rect=element.getBoundingClientRect();return{x:rect.right,y:rect.top+Math.min(rect.height/2,80)};};
   const showEditor=(value:EditorState,anchor?:EditorAnchor)=>{setEditorAnchor(anchor||{x:Math.round(window.innerWidth*.62),y:Math.round(window.innerHeight*.28)});setEditor(value);};
   const closeEditor=()=>{setEditor(null);setEditorAnchor(null);};
   const openNew=(date=selectedDate,anchor?:EditorAnchor)=>{const calendar=writableCalendars[0];if(!calendar){toast.error(t('calendar.noWritable'),{description:t('calendar.noWritableHelp')});return;}const start=new Date(date);start.setHours(new Date().getHours()+1,0,0,0);const end=new Date(start.getTime()+3600000);showEditor({calendarId:calendar.id,title:'',start:localValue(start),end:localValue(end),location:'',notes:'',allDay:false,meetingId:''},anchor);};
   const openNewRange=(start:Date,end:Date,anchor:EditorAnchor)=>{const calendar=writableCalendars[0];if(!calendar){toast.error(t('calendar.noWritable'),{description:t('calendar.noWritableHelp')});return;}showEditor({calendarId:calendar.id,title:'',start:localValue(start),end:localValue(end),location:'',notes:'',allDay:false,meetingId:''},anchor);};
-  const saveEvent=async()=>{if(!editor)return;setSaving(true);try{const saved=await invoke<CalendarEvent>('api_save_calendar_event',{event:{id:editor.id||null,calendarId:editor.calendarId,title:editor.title,startAt:new Date(editor.start).toISOString(),endAt:new Date(editor.end).toISOString(),location:editor.location||null,notes:editor.notes||null,allDay:editor.allDay}});if(editor.meetingId){await invoke('api_update_meeting_schedule',{meetingId:editor.meetingId,startAt:saved.startAt,endAt:saved.endAt||null,calendarEventId:saved.id});await refetchMeetings();}closeEditor();await load();toast.success(editor.id?t('calendar.eventUpdated'):t('calendar.eventCreated'));}catch(error){showError(t('calendar.saveFailed'),error);}finally{setSaving(false);}};
-  const deleteEvent=async()=>{if(!editor?.id)return;setSaving(true);try{await invoke('api_delete_calendar_event',{eventId:editor.id});closeEditor();await Promise.all([load(),refetchMeetings()]);toast.success(t('calendar.eventDeleted'));}catch(error){showError(t('calendar.deleteFailed'),error);}finally{setSaving(false);}};
+  const saveEvent=async()=>{if(!editor)return;setSaving(true);try{const saved=await invoke<CalendarEvent>('api_save_calendar_event',{event:{id:editor.id||null,calendarId:editor.calendarId,title:editor.title,startAt:new Date(editor.start).toISOString(),endAt:new Date(editor.end).toISOString(),location:editor.location||null,notes:editor.notes||null,allDay:editor.allDay}});if(editor.meetingId){await invoke('api_update_meeting_schedule',{meetingId:editor.meetingId,startAt:saved.startAt,endAt:saved.endAt||null,calendarEventId:saved.id});await refetchMeetings();}closeEditor();await load(true);toast.success(editor.id?t('calendar.eventUpdated'):t('calendar.eventCreated'));}catch(error){showError(t('calendar.saveFailed'),error);}finally{setSaving(false);}};
+  const deleteEvent=async()=>{if(!editor?.id)return;setSaving(true);try{await invoke('api_delete_calendar_event',{eventId:editor.id});closeEditor();await Promise.all([load(true),refetchMeetings()]);toast.success(t('calendar.eventDeleted'));}catch(error){showError(t('calendar.deleteFailed'),error);}finally{setSaving(false);}};
   const move=(direction:number)=>setCursor(current=>view==='month'?(direction>0?addMonths(current,1):subMonths(current,1)):view==='week'?(direction>0?addWeeks(current,1):subWeeks(current,1)):addDays(current,direction));
   const title=view==='month'?format(cursor,'LLLL yyyy',{locale:calendarLocale}):view==='week'?`${format(range.start,'PP',{locale:calendarLocale})}–${format(range.end,'PP',{locale:calendarLocale})}`:format(cursor,'PPPP',{locale:calendarLocale});
 

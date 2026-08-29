@@ -34,12 +34,13 @@ export function useRecordingStart(
     const now = new Date();
     const day = String(now.getDate()).padStart(2, "0");
     const month = String(now.getMonth() + 1).padStart(2, "0");
-    const year = String(now.getFullYear()).slice(-2);
+    const year = String(now.getFullYear());
     const hours = String(now.getHours()).padStart(2, "0");
     const minutes = String(now.getMinutes()).padStart(2, "0");
     const seconds = String(now.getSeconds()).padStart(2, "0");
-    return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-  }, []);
+    const label = zh ? '会议' : 'Meeting';
+    return `${label} ${year}-${month}-${day} ${hours}-${minutes}-${seconds}`;
+  }, [zh]);
 
   const start = useCallback(
     async (source: "recording_page" | "sidebar_auto" | "sidebar_direct") => {
@@ -56,6 +57,11 @@ export function useRecordingStart(
         : generateMeetingTitle();
       setMeetingTitle(title);
       clearTranscripts();
+
+      // Never allow metadata from an earlier recording to name or link this
+      // session while the stop event for the new recording is still arriving.
+      sessionStorage.removeItem('last_recording_folder_path');
+      sessionStorage.removeItem('last_recording_meeting_name');
 
       try {
         // The recording workspace is intentionally recording + notes only.
@@ -75,7 +81,7 @@ export function useRecordingStart(
         setIsRecording(true);
         setIsMeetingActive(true);
         Analytics.trackButtonClick("start_recording", source);
-        await showRecordingNotification();
+        await showRecordingNotification(locale);
       } catch (error) {
         sessionStorage.removeItem("recording_live_transcription");
         sessionStorage.removeItem("recording_live_transcription_is_preview");
@@ -104,6 +110,7 @@ export function useRecordingStart(
       isAutoStarting,
       isRecording,
       meetingTitle,
+      locale,
       selectedDevices,
       setIsMeetingActive,
       setIsRecording,

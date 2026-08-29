@@ -7,7 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { openMeetingWorkspace } from '@/lib/meeting-window';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { boundedPercentage, progressDescription, reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { boundedPercentage, progressDescription, reportTechnicalError, toUserFacingError, transcriptionProgressLabel } from '@/lib/feedback';
 
 type AiProgress = { stage?: string; percentage?: number; message?: string };
 type ProgressEvent = { meetingId: string; progress: AiProgress };
@@ -21,6 +21,7 @@ type TranscriptionProgressEvent = {
   progress_percentage: number;
   message?: string;
   stage?: string;
+  determinate?: boolean;
 };
 type TranscriptionResultEvent = {
   meeting_id?: string;
@@ -75,22 +76,6 @@ export function BackgroundAiTaskMonitor() {
         case 'preview': return t('background.organizerSaving');
         default: return t('background.organizingContent');
       }
-    };
-    const transcriptionStage = (stage: string | undefined, percentage: number | null) => {
-      if (stage === 'decoding' || stage === 'preparing') return zh ? '正在准备音频' : 'Preparing audio';
-      if (stage === 'vad') return zh ? '正在检测有效语音' : 'Detecting speech';
-      if (stage === 'loading_model') return zh ? '正在加载识别模型' : 'Loading ASR model';
-      if (stage === 'analyzing_audio') return zh ? '模型已就绪，正在分析音频' : 'Model ready, analyzing audio';
-      if (stage === 'recognizing' || stage === 'transcribing') return zh ? '正在识别语音' : 'Recognizing speech';
-      if (stage === 'diarizing') return zh ? '正在区分讲话人' : 'Identifying speakers';
-      if (stage === 'saving') return zh ? '正在整理并保存文字稿' : 'Organizing and saving transcript';
-      if (stage === 'complete') return zh ? '正在完成转写' : 'Finishing transcription';
-      if (percentage == null) return zh ? '正在处理录音' : 'Processing recording';
-      if (percentage < 15) return zh ? '正在准备音频' : 'Preparing audio';
-      if (percentage < 30) return zh ? '正在加载识别模型' : 'Loading ASR model';
-      if (percentage < 88) return zh ? '正在识别语音' : 'Recognizing speech';
-      if (percentage < 98) return zh ? '正在整理并保存文字稿' : 'Organizing and saving transcript';
-      return zh ? '正在完成转写' : 'Finishing transcription';
     };
     const meetingIdOf = (payload: { meeting_id?: string; meetingId?: string }) => payload.meetingId || payload.meeting_id || '';
     const showProgress = (id: string, title: string, description: string, onOpen: () => void) => {
@@ -176,11 +161,11 @@ export function BackgroundAiTaskMonitor() {
       addListener<TranscriptionProgressEvent>('retranscription-progress', payload => {
         const meetingId = meetingIdOf(payload);
         if (!meetingId) return;
-        const percentage = boundedPercentage(payload.progress_percentage);
+        const percentage = payload.determinate === false ? null : boundedPercentage(payload.progress_percentage);
         showProgress(
           transcriptionToastId(meetingId),
           zh ? `正在转写“${meetingTitle(meetingId)}”` : `Transcribing “${meetingTitle(meetingId)}”`,
-          progressDescription(transcriptionStage(payload.stage, percentage), percentage),
+          progressDescription(transcriptionProgressLabel(payload.stage, locale), percentage),
           () => openMeeting(meetingId),
         );
       }),

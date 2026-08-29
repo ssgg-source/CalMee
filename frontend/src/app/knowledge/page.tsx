@@ -1,8 +1,18 @@
 "use client";
 
-import { KnowledgeSettings } from "@/components/KnowledgeSettings";
+import dynamic from "next/dynamic";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { ProductPage, ProductPageContent, ProductPageHeader } from "@/components/layout/ProductPage";
+
+const KnowledgeSettings = dynamic(() => import("@/components/KnowledgeSettings").then(module => module.KnowledgeSettings), {
+  ssr: false,
+  loading: () => (
+    <div className="space-y-3">
+      <div className="h-9 w-56 animate-pulse rounded-lg bg-muted" />
+      <div className="h-[430px] animate-pulse rounded-xl bg-muted/55" />
+    </div>
+  ),
+});
 
 export default function KnowledgePage() {
   const { locale } = useLanguage();

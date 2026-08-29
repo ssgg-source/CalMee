@@ -77,7 +77,7 @@ pub fn create_meeting_folder(
     meeting_name: &str,
     create_checkpoints_dir: bool,
 ) -> Result<PathBuf> {
-    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M").to_string();
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M").to_string();
     let sanitized_name = sanitize_filename(meeting_name);
     let folder_name = format!("{}_{}", sanitized_name, timestamp);
     let meeting_folder = base_path.join(folder_name);

@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -25,11 +25,33 @@ const time = (seconds: number) => {
   return `${Math.floor(value / 60).toString().padStart(2, '0')}:${(value % 60).toString().padStart(2, '0')}`;
 };
 
+const reportMediaDiagnostic = (scope: string, audio: HTMLAudioElement | null, error?: unknown) => {
+  const nativeError = error instanceof Error
+    ? { name: error.name, message: error.message }
+    : error == null ? null : { message: String(error) };
+  const mediaError = audio?.error
+    ? { code: audio.error.code, message: audio.error.message }
+    : null;
+  void invoke('log_media_diagnostic', {
+    scope,
+    detail: JSON.stringify({
+      nativeError,
+      mediaError,
+      readyState: audio?.readyState ?? null,
+      networkState: audio?.networkState ?? null,
+      paused: audio?.paused ?? null,
+      duration: audio?.duration ?? null,
+      currentSrc: audio?.currentSrc ?? null,
+    }),
+  }).catch(() => undefined);
+};
+
 export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function AudioPlayer({ meetingId, onPathChange, onTimeChange }, ref) {
   const { locale } = useLanguage();
   const zh = locale === 'zh-CN';
   const audioRef = useRef<HTMLAudioElement>(null);
   const [path, setPath] = useState<string | null>(null);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -42,29 +64,63 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
     return Number.isFinite(saved) ? Math.max(0, Math.min(1, saved)) : 1;
   });
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [repairing, setRepairing] = useState(false);
 
   useEffect(() => {
-    setPath(null); setCurrent(0); setDuration(0); setPlaying(false);
-    invoke<string | null>('api_get_meeting_audio_path', { meetingId }).then(value => {
+    let cancelled = false;
+    setPath(null); setSourceUrl(null); setCurrent(0); setDuration(0); setPlaying(false); setLoadFailed(false);
+    invoke<string | null>('api_get_meeting_audio_path', { meetingId }).then(async value => {
+      if (cancelled) return;
       setPath(value); onPathChange?.(value);
-    }).catch(() => undefined);
+      if (!value) return;
+      const url = await invoke<string>('get_audio_stream_url', { path: value });
+      if (!cancelled) setSourceUrl(url);
+    }).catch(error => {
+      if (cancelled) return;
+      reportTechnicalError('audio-source-load', error);
+      setLoadFailed(true);
+    });
+    return () => { cancelled = true; };
   }, [meetingId, onPathChange]);
 
   const choose = async () => {
     try {
       const file = await invoke<AudioFileInfo | null>('select_and_validate_audio_command', { meetingId });
       if (!file) return;
-      setPlaying(false); setLoading(true); setPath(file.path); onPathChange?.(file.path); setCurrent(0); setDuration(file.duration_seconds || 0);
+      const url = await invoke<string>('get_audio_stream_url', { path: file.path });
+      setPlaying(false); setLoading(true); setLoadFailed(false); setPath(file.path); setSourceUrl(url); onPathChange?.(file.path); setCurrent(0); setDuration(file.duration_seconds || 0);
     } catch (error) { reportTechnicalError('audio-file-load', error); toast.error(zh ? '音频载入失败' : 'Could not load audio', { description: toUserFacingError(error, locale).message }); }
   };
 
+  const repairLegacyAudio = async () => {
+    if (repairing) return;
+    setRepairing(true);
+    try {
+      const repairedPath = await invoke<string>('api_repair_legacy_meeting_audio', { meetingId });
+      const url = await invoke<string>('get_audio_stream_url', { path: repairedPath });
+      setPlaying(false); setCurrent(0); setDuration(0); setLoadFailed(false); setLoading(true);
+      setPath(repairedPath); setSourceUrl(url); onPathChange?.(repairedPath);
+      toast.success(zh ? '已生成兼容的播放副本' : 'Compatible playback copy created', {
+        description: zh ? '原始 MP4 已保留。' : 'The original MP4 was preserved.',
+      });
+    } catch (error) {
+      reportTechnicalError('audio-repair', error);
+      toast.error(zh ? '音频修复失败' : 'Could not repair audio', {
+        description: toUserFacingError(error, locale).message,
+      });
+    } finally {
+      setRepairing(false);
+    }
+  };
+
   useEffect(() => {
-    if (!path || !audioRef.current) return;
+    if (!sourceUrl || !audioRef.current) return;
     setPlaying(false);
     setLoading(true);
     setCurrent(0);
     audioRef.current.load();
-  }, [path]);
+  }, [sourceUrl]);
 
   // Playback controls must never reload the media. Calling load() for a volume
   // or speed change resets currentTime and can leave WebKit unable to resume a
@@ -114,6 +170,7 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
       }
       await audio.play();
     } catch (error) {
+      reportMediaDiagnostic('playback-promise', audio, error);
       reportTechnicalError('audio-play', error);
       toast.error(zh ? '音频无法播放' : 'Could not play audio', { description: toUserFacingError(error, locale).message });
     }
@@ -146,7 +203,8 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
   };
 
   return <div className="flex w-full min-w-0 max-w-2xl items-center justify-center gap-2 px-2">
-    {path && <audio key={path} ref={audioRef} src={convertFileSrc(path)} preload="auto" playsInline onLoadStart={()=>setLoading(true)} onCanPlay={()=>setLoading(false)} onCanPlayThrough={()=>setLoading(false)} onPlaying={()=>{setLoading(false);setPlaying(true);}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={event=>{setPlaying(false);setCurrent(event.currentTarget.duration||0);onTimeChange?.(event.currentTarget.duration||0);}} onLoadedMetadata={event=>{setDuration(event.currentTarget.duration);event.currentTarget.playbackRate=rate;event.currentTarget.volume=volume;}} onSeeking={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onSeeked={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onError={event=>{setLoading(false);setPlaying(false);const detail=event.currentTarget.error?.message||'不支持此音频格式或文件无法访问';toast.error('音频载入失败',{description:detail});}} onTimeUpdate={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} />}
+    {sourceUrl && <audio key={sourceUrl} ref={audioRef} src={sourceUrl} preload="metadata" playsInline onLoadStart={()=>setLoading(true)} onCanPlay={()=>{setLoading(false);setLoadFailed(false);}} onCanPlayThrough={()=>{setLoading(false);setLoadFailed(false);}} onPlaying={()=>{setLoading(false);setLoadFailed(false);setPlaying(true);}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={event=>{setPlaying(false);setCurrent(event.currentTarget.duration||0);onTimeChange?.(event.currentTarget.duration||0);}} onLoadedMetadata={event=>{setDuration(event.currentTarget.duration);event.currentTarget.playbackRate=rate;event.currentTarget.volume=volume;}} onSeeking={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onSeeked={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onError={event=>{setLoading(false);setPlaying(false);setLoadFailed(true);reportMediaDiagnostic('media-element-error',event.currentTarget);const detail=event.currentTarget.error?.message||(zh?'不支持此音频格式或文件无法访问':'Unsupported audio format or inaccessible file');toast.error(zh?'音频载入失败':'Could not load audio',{description:detail});}} onTimeUpdate={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} />}
+    {loadFailed && <Button variant="ghost" size="sm" className="h-8 shrink-0 text-[11px] text-amber-700" disabled={repairing} onClick={()=>void repairLegacyAudio()}>{repairing?(zh?'修复中…':'Repairing…'):(zh?'修复旧录音':'Repair old audio')}</Button>}
     <Button variant="ghost" size="icon" className="relative h-8 w-8" disabled={!path} onClick={()=>jump(-15)} title="后退 15 秒"><RotateCcw className="!h-[18px] !w-[18px]" /><span className="pointer-events-none absolute inset-0 flex items-center justify-center pt-px text-[7px] font-bold">15</span></Button>
     <Button variant="outline" size="icon" className="h-9 w-9 rounded-full border-violet-200 text-violet-700" disabled={!path && loading} onClick={()=>void togglePlayback()} title={path ? (playing?'暂停':'播放') : '选择音频'}>{playing?<Pause className="h-4 w-4"/>:<Play className="ml-0.5 h-4 w-4"/>}</Button>
     <Button variant="ghost" size="icon" className="relative h-8 w-8" disabled={!path} onClick={()=>jump(15)} title="前进 15 秒"><RotateCw className="!h-[18px] !w-[18px]" /><span className="pointer-events-none absolute inset-0 flex items-center justify-center pt-px text-[7px] font-bold">15</span></Button>

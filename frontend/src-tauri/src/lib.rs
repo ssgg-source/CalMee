@@ -46,6 +46,7 @@ pub mod funasr_engine;
 pub mod groq;
 pub mod knowledge;
 pub mod legacy_hotwords;
+pub mod media_server;
 pub mod meeting_workspace;
 pub mod notifications;
 pub mod ollama;
@@ -53,6 +54,7 @@ pub mod onboarding;
 pub mod openai;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod remote_funasr;
 pub mod state;
 pub mod summary;
 pub mod transcript_refinement;
@@ -400,6 +402,34 @@ async fn set_language_preference(language: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn log_media_diagnostic(scope: String, detail: String) {
+    log_error!("Media diagnostic [{}]: {}", scope, detail);
+}
+
+#[tauri::command]
+async fn get_audio_stream_url<R: Runtime>(
+    app: AppHandle<R>,
+    server: tauri::State<'_, media_server::MediaServerState>,
+    path: String,
+) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("Audio file is unavailable: {error}"))?;
+    if !path.is_file() || !app.asset_protocol_scope().is_allowed(&path) {
+        return Err("Audio file is outside CalMee's approved media scope".to_string());
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .ok_or_else(|| "Audio file has no supported extension".to_string())?;
+    if !audio::AUDIO_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("Audio file has no supported extension".to_string());
+    }
+    Ok(server.register(path))
+}
+
 // Internal helper function to get language preference (for use within Rust code)
 pub fn get_language_preference_internal() -> Option<String> {
     LANGUAGE_PREFERENCE.lock().ok().map(|lang| lang.clone())
@@ -409,6 +439,8 @@ pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
     let mut builder = tauri::Builder::default();
+    let media_server = media_server::MediaServerState::start()
+        .expect("failed to start the local media streaming server");
 
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
@@ -429,6 +461,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .manage(media_server)
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -741,7 +774,10 @@ pub fn run() {
             meeting_workspace::api_link_meeting_calendar_event,
             meeting_workspace::api_get_linked_calendar_event,
             meeting_workspace::api_get_meeting_audio_path,
+            meeting_workspace::api_repair_legacy_meeting_audio,
             meeting_workspace::api_get_meeting_speaker_options,
+            log_media_diagnostic,
+            get_audio_stream_url,
             calendar_integration::api_test_caldav,
             calendar_integration::api_sync_calendars,
             // Parallel processing commands

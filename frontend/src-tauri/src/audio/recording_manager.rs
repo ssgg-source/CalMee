@@ -29,6 +29,7 @@ pub struct RecordingManager {
     recording_saver: RecordingSaver,
     device_monitor: Option<AudioDeviceMonitor>,
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
+    final_recording_duration: Option<f64>,
 }
 
 // SAFETY: RecordingManager contains types that we've marked as Send
@@ -49,6 +50,7 @@ impl RecordingManager {
             recording_saver: RecordingSaver::new(),
             device_monitor: Some(device_monitor),
             device_event_receiver: Some(device_event_receiver),
+            final_recording_duration: None,
         }
     }
 
@@ -67,6 +69,7 @@ impl RecordingManager {
         auto_save: bool,
     ) -> Result<mpsc::UnboundedReceiver<AudioChunk>> {
         info!("Starting recording manager (auto_save: {})", auto_save);
+        self.final_recording_duration = None;
 
         // Set up transcription channel
         let (transcription_sender, transcription_receiver) =
@@ -248,6 +251,7 @@ impl RecordingManager {
     /// Stop recording streams without saving (for use when waiting for transcription)
     pub async fn stop_streams_only(&mut self) -> Result<()> {
         info!("Stopping recording streams only");
+        self.final_recording_duration = self.state.get_active_recording_duration();
 
         // Stop device monitoring
         if let Some(ref mut monitor) = self.device_monitor {
@@ -274,6 +278,7 @@ impl RecordingManager {
     /// Stop streams and force immediate pipeline flush to process all accumulated audio
     pub async fn stop_streams_and_force_flush(&mut self) -> Result<()> {
         info!("🚀 Stopping recording streams with IMMEDIATE pipeline flush");
+        self.final_recording_duration = self.state.get_active_recording_duration();
 
         // CRITICAL: Stop device monitor FIRST to prevent continuous WASAPI polling on Windows
         // This fixes the slow shutdown issue where device enumeration runs for 90+ seconds
@@ -312,7 +317,10 @@ impl RecordingManager {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
-        let recording_duration = self.state.get_active_recording_duration();
+        let recording_duration = self
+            .final_recording_duration
+            .take()
+            .or_else(|| self.state.get_active_recording_duration());
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
@@ -348,6 +356,7 @@ impl RecordingManager {
 
         // Get recording duration BEFORE stopping (important!)
         let recording_duration = self.state.get_active_recording_duration();
+        self.final_recording_duration = recording_duration;
         info!("Recording duration before stop: {:?}s", recording_duration);
 
         // Stop recording state first

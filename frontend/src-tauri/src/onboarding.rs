@@ -191,15 +191,12 @@ pub async fn complete_onboarding<R: Runtime>(
 
     // Recording is useful without transcription. Model choice belongs in
     // Settings and must never be coupled to completing first-run setup.
-    if let Err(e) = SettingsRepository::save_transcript_config(
-        pool,
-        "none",
-        "",
-    )
-    .await
-    {
+    if let Err(e) = SettingsRepository::save_transcript_config(pool, "none", "").await {
         error!("Failed to save transcription model config: {}", e);
-        return Err(format!("Failed to save recording-only transcription config: {}", e));
+        return Err(format!(
+            "Failed to save recording-only transcription config: {}",
+            e
+        ));
     }
     info!("Saved recording-only transcription config");
 

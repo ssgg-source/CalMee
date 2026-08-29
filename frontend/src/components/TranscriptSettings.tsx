@@ -12,14 +12,14 @@ import { FunAsrSettings } from './FunAsrSettings';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
-export type TranscriptProvider = 'none' | 'localWhisper' | 'parakeet' | 'funasr' | 'qwen3asr' | 'deepgram' | 'groq' | 'openai' | 'qwen-cloud' | 'doubao' | 'tencent-asr' | 'baidu-asr' | 'iflytek-asr' | 'huawei-asr';
+export type TranscriptProvider = 'none' | 'localWhisper' | 'parakeet' | 'funasr' | 'qwen3asr' | 'funasr-server' | 'deepgram' | 'groq' | 'openai' | 'qwen-cloud' | 'doubao' | 'tencent-asr' | 'baidu-asr' | 'iflytek-asr' | 'huawei-asr';
 export interface TranscriptModelProps { provider: TranscriptProvider; model: string; apiKey?: string | null }
 export interface TranscriptSettingsProps { transcriptModelConfig: TranscriptModelProps; setTranscriptModelConfig: (config: TranscriptModelProps) => void; onModelSelect?: () => void }
 
-type CredentialField = { key: string; label: string; placeholder: string; secret?: boolean };
+type CredentialField = { key: string; label: string; placeholder: string; secret?: boolean; required?: boolean };
 const LOCAL_PROVIDERS: TranscriptProvider[] = ['none', 'localWhisper', 'parakeet', 'funasr', 'qwen3asr'];
 const MODEL_OPTIONS: Record<TranscriptProvider, string[]> = {
-  none: [], localWhisper: [], parakeet: [], funasr: [], qwen3asr: [],
+  none: [], localWhisper: [], parakeet: [], funasr: [], qwen3asr: [], 'funasr-server': ['default'],
   openai: ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe-diarize'],
   'qwen-cloud': ['qwen3-asr-flash', 'qwen3-asr-flash-filetrans'],
   doubao: ['volc.bigasr.auc_turbo', 'volc.bigasr.auc'],
@@ -42,6 +42,7 @@ const MODEL_LABELS: Record<string, string> = {
   'realtime-asr': 'Real-time speech recognition',
 };
 const CREDENTIAL_FIELDS: Record<Exclude<TranscriptProvider, 'none' | 'localWhisper' | 'parakeet' | 'funasr' | 'qwen3asr'>, CredentialField[]> = {
+  'funasr-server': [{ key: 'endpoint', label: 'Server URL', placeholder: 'https://asr.example.com/v1/audio/transcriptions', required: true }, { key: 'apiKey', label: 'Access token (optional)', placeholder: 'Bearer token', secret: true, required: false }],
   openai: [{ key: 'apiKey', label: 'API Key', placeholder: 'sk-…', secret: true }],
   'qwen-cloud': [{ key: 'apiKey', label: 'API Key', placeholder: 'sk-…', secret: true }],
   doubao: [{ key: 'apiKey', label: 'API Key', placeholder: 'X-Api-Key', secret: true }, { key: 'resourceId', label: 'Resource ID', placeholder: 'volc.bigasr.auc_turbo' }],
@@ -52,7 +53,7 @@ const CREDENTIAL_FIELDS: Record<Exclude<TranscriptProvider, 'none' | 'localWhisp
   groq: [{ key: 'apiKey', label: 'API Key', placeholder: 'gsk_…', secret: true }],
   deepgram: [{ key: 'apiKey', label: 'API Key', placeholder: 'Deepgram API Key', secret: true }],
 };
-const TESTABLE = new Set<TranscriptProvider>(['openai', 'qwen-cloud', 'groq', 'deepgram']);
+const TESTABLE = new Set<TranscriptProvider>(['funasr-server', 'openai', 'qwen-cloud', 'groq', 'deepgram']);
 
 export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelConfig, onModelSelect }: TranscriptSettingsProps) {
   const { lt, locale } = useLanguage();
@@ -65,7 +66,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
   const [savingCloud, setSavingCloud] = useState(false);
   const isLocal = LOCAL_PROVIDERS.includes(uiProvider);
   const fields = isLocal ? [] : CREDENTIAL_FIELDS[uiProvider as keyof typeof CREDENTIAL_FIELDS];
-  const cloudReady = !isLocal && Boolean(cloudModel) && fields.every(field => credentials[field.key]?.trim());
+  const cloudReady = !isLocal && Boolean(cloudModel) && fields.every(field => field.required === false || credentials[field.key]?.trim());
 
   useEffect(() => setUiProvider(transcriptModelConfig.provider), [transcriptModelConfig.provider]);
 
@@ -107,12 +108,12 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
   };
 
   const testCloudConnection = async () => {
-    const apiKey = credentials.apiKey?.trim();
-    if (!apiKey || !TESTABLE.has(uiProvider)) return;
+    const apiKey = credentials.apiKey?.trim() || '';
+    if (!TESTABLE.has(uiProvider) || (uiProvider !== 'funasr-server' && !apiKey)) return;
     setTestingConnection(true);
     try {
-      await invoke('api_test_transcript_connection', { provider: uiProvider, apiKey });
-      toast.success(lt('Connection successful'), { description: lt('Credentials are valid. No recording audio was uploaded.') });
+      await invoke('api_test_transcript_connection', { provider: uiProvider, apiKey, endpoint: credentials.endpoint?.trim() || null });
+      toast.success(lt('Connection successful'), { description: uiProvider === 'funasr-server' ? (zh ? '服务器可访问；连接测试没有上传录音。接口格式会在首次转写时完整验证。' : 'The server is reachable; no recording was uploaded. The full API response format is validated on the first transcription.') : lt('Credentials are valid. No recording audio was uploaded.') });
     } catch (error) {
       reportTechnicalError('test-transcription-connection', error);
       toast.error(lt('Connection failed'), { description: toUserFacingError(error, locale).message });
@@ -158,6 +159,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
               <SelectItem value="qwen3asr">🏠 {lt('Qwen3-ASR (Local)')}</SelectItem>
             </SelectGroup>
             <SelectGroup><SelectLabel>{lt('Chinese cloud ASR')}</SelectLabel>
+              <SelectItem value="funasr-server">🌐 {zh ? 'FunASR 服务器（OpenAI 兼容）' : 'FunASR server (OpenAI-compatible)'}</SelectItem>
               <SelectItem value="qwen-cloud">☁️ {lt('Alibaba Cloud Model Studio (Qwen ASR)')}</SelectItem>
               <SelectItem value="doubao">☁️ {lt('Volcano Engine (Doubao Speech)')}</SelectItem>
               <SelectItem value="tencent-asr">☁️ {lt('Tencent Cloud Speech Recognition')}</SelectItem>
@@ -170,18 +172,18 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             </SelectGroup>
           </SelectContent>
         </Select>
-        {!isLocal && <Select value={cloudModel} onValueChange={setCloudModel}><SelectTrigger className="focus:border-blue-500 focus:ring-1 focus:ring-blue-500"><SelectValue placeholder={lt('Select model')} /></SelectTrigger><SelectContent>{MODEL_OPTIONS[uiProvider].map(model => <SelectItem key={model} value={model}>{lt(MODEL_LABELS[model] || model)}</SelectItem>)}</SelectContent></Select>}
+        {!isLocal && (uiProvider === 'funasr-server' ? <Input value={cloudModel} onChange={event => setCloudModel(event.target.value)} placeholder={zh ? '服务器模型名，例如 FunAudioLLM-8B' : 'Server model name, e.g. FunAudioLLM-8B'} /> : <Select value={cloudModel} onValueChange={setCloudModel}><SelectTrigger className="focus:border-blue-500 focus:ring-1 focus:ring-blue-500"><SelectValue placeholder={lt('Select model')} /></SelectTrigger><SelectContent>{MODEL_OPTIONS[uiProvider].map(model => <SelectItem key={model} value={model}>{lt(MODEL_LABELS[model] || model)}</SelectItem>)}</SelectContent></Select>)}
       </div>
     </div>
 
     {uiProvider === 'none' ? <div className="rounded-xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-sm leading-6 text-slate-600">
       {zh ? '仅保存录音和会中笔记，不加载语音识别模型，也不生成实时字幕。录音结束后可在会议页面选择任意已配置模型进行完整转写。' : 'Saves audio and live notes without loading a speech-recognition model or producing live captions. After recording, choose any configured model on the meeting page to transcribe the full recording.'}
     </div> : isLocal ? <div>{localManager}</div> : <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4">
-      <div className="flex gap-3 text-xs leading-5 text-gray-600"><Cloud className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><p>{lt('Configure the cloud service here. CalMee will ask again before sending recording audio to this provider.')}</p></div>
+      <div className="flex gap-3 text-xs leading-5 text-gray-600"><Cloud className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><p>{uiProvider === 'funasr-server' ? (zh ? '连接使用 OpenAI 兼容的 /v1/audio/transcriptions 接口。转写时完整录音会发送到你配置的服务器；公网服务建议使用 HTTPS。' : 'Uses an OpenAI-compatible /v1/audio/transcriptions endpoint. The full recording is sent to your configured server; use HTTPS for internet-facing services.') : lt('Configure the cloud service here. CalMee will ask again before sending recording audio to this provider.')}</p></div>
       <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">{zh?'当前页面用于保存和验证云端凭证。只有完成音频上传、任务轮询和结果转换连接器的服务，才会出现在转写任务中。':'This page stores and validates cloud credentials. A provider appears in transcription tasks only after its upload, polling, and result adapter is implemented.'}</div>
       {loadingCredentials ? <div className="flex items-center gap-2 py-4 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" />{lt('Loading…')}</div> : <div className="grid gap-3 md:grid-cols-2">{fields.map(field => <div key={field.key} className="space-y-1.5"><Label>{field.label}</Label><Input type={field.secret ? 'password' : 'text'} value={credentials[field.key] || ''} onChange={event => setCredentials(current => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} /></div>)}</div>}
       <div className="flex flex-wrap gap-2">
-        {TESTABLE.has(uiProvider) && <Button variant="outline" onClick={() => void testCloudConnection()} disabled={!credentials.apiKey?.trim() || testingConnection || savingCloud}>{testingConnection ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-2 h-4 w-4" />}{lt('Test Connection')}</Button>}
+        {TESTABLE.has(uiProvider) && <Button variant="outline" onClick={() => void testCloudConnection()} disabled={(uiProvider === 'funasr-server' ? !credentials.endpoint?.trim() : !credentials.apiKey?.trim()) || testingConnection || savingCloud}>{testingConnection ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-2 h-4 w-4" />}{lt('Test Connection')}</Button>}
         <Button onClick={() => void saveCloud()} disabled={!cloudReady || savingCloud || testingConnection}>{savingCloud ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}{lt('Save configuration')}</Button>
       </div>
     </div>}

@@ -36,6 +36,16 @@ pub fn encode_single_audio(
 
     debug!("Using FFmpeg at: {:?}", ffmpeg_path);
 
+    let container = match output_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("m4a") => "ipod",
+        _ => "mp4",
+    };
+
     let mut command = Command::new(ffmpeg_path);
     command
         .args([
@@ -56,7 +66,7 @@ pub fn encode_single_audio(
             "-movflags",
             "+faststart", // Optimize for web streaming
             "-f",
-            "mp4",
+            container,
             output_path.to_str().unwrap(),
         ])
         .stdin(Stdio::piped())

@@ -31,6 +31,18 @@ export default function DashboardPage(){
   const [deleting,setDeleting]=useState(false);
 
   useEffect(()=>{const timer=window.setTimeout(()=>void searchTranscripts(query),250);return()=>window.clearTimeout(timer);},[query,searchTranscripts]);
+  // Warm the meeting route while the user is browsing the dashboard. This is
+  // especially noticeable in the desktop development build where Next compiles
+  // a route on first use, and remains useful for production chunk preloading.
+  useEffect(()=>{
+    router.prefetch('/meeting-details');
+    // Next intentionally skips route prefetching in development. Warm the page
+    // in the background so desktop testing does not stall on a multi-thousand
+    // module compile the first time a meeting tab is clicked.
+    if(process.env.NODE_ENV!=='development')return;
+    const timer=window.setTimeout(()=>{void fetch('/meeting-details',{cache:'no-store'}).catch(()=>undefined);},300);
+    return()=>window.clearTimeout(timer);
+  },[router]);
   useEffect(()=>{setSelectionMode(false);setSelectedIds(new Set());},[query,filter,selectedDateKey]);
 
   const todayKey=new Date().toDateString();

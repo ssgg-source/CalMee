@@ -68,7 +68,7 @@ type TranscriptVersionSnapshot = {
   segments: Transcript[];
 };
 export interface RawTranscriptViewRef {
-  save: () => Promise<void>;
+  save: (notify?: boolean) => Promise<void>;
   copy: () => Promise<void>;
   reloadAi: () => Promise<void>;
   replaceAll: (from: string, to: string) => Promise<number>;
@@ -177,9 +177,11 @@ export const RawTranscriptView = forwardRef<
     onRefetch?: () => Promise<void>;
     onSeek?: (seconds: number) => void;
     currentTime?: number;
+    autoSave?: boolean;
+    onDirtyChange?: (dirty: boolean) => void;
   }
 >(function RawTranscriptView(
-  { meetingId, transcripts, segments, onRefetch, onSeek, currentTime = 0 },
+  { meetingId, transcripts, segments, onRefetch, onSeek, currentTime = 0, autoSave = true, onDirtyChange },
   ref,
 ) {
   const { locale } = useLanguage();
@@ -481,11 +483,13 @@ export const RawTranscriptView = forwardRef<
     }
     setSpeakerMap(map);
   }, [liveRows, speakerOverrides, zh]);
-  const save = async () => {
+  const save = async (notify = true) => {
     if (version === "original") {
-      toast.info(
-        zh ? "原文基线为只读版本" : "The original baseline is read-only",
-      );
+      if (notify) {
+        toast.info(
+          zh ? "原文基线为只读版本" : "The original baseline is read-only",
+        );
+      }
       return;
     }
     const changes = Object.entries(
@@ -525,13 +529,24 @@ export const RawTranscriptView = forwardRef<
     if (version === "optimized") {
       setOptimizedDrafts({});
       await reloadAi();
-      toast.success("AI 优化文稿已保存");
+      if (notify) toast.success("AI 优化文稿已保存");
       return;
     }
     setDrafts({});
     await onRefetch?.();
-    toast.success(zh ? "聚类文稿已保存" : "Clustered transcript saved");
+    if (notify) toast.success(zh ? "聚类文稿已保存" : "Clustered transcript saved");
   };
+  const hasUnsavedChanges = Object.keys(
+    version === "optimized" ? optimizedDrafts : drafts,
+  ).length > 0;
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
+  useEffect(() => {
+    if (!autoSave || !hasUnsavedChanges || version === "original") return;
+    const timer = window.setTimeout(() => { void save(false); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [autoSave, hasUnsavedChanges, drafts, optimizedDrafts, version]);
   const copy = async () => {
     await navigator.clipboard.writeText(
       groups

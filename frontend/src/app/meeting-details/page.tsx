@@ -10,6 +10,7 @@ import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { getMeetingSummary } from "@/lib/meeting-summary";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -212,9 +213,7 @@ function MeetingDetailsContent() {
 
     const fetchMeetingSummary = async () => {
       try {
-        const summary = await invoke('api_get_summary', {
-          meetingId: meetingId,
-        }) as any;
+        const summary = await getMeetingSummary(meetingId);
 
         console.log('FETCH SUMMARY: Raw response:', summary);
 

@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import {
@@ -33,12 +33,28 @@ const footerItems = [
   { href: '/about', labelKey: 'nav.about', icon: Info },
 ] as const;
 
+const warmRoutes = ['/recording', '/calendar', '/upload', '/knowledge', '/settings', '/about'] as const;
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { t, locale } = useLanguage();
   const { refetchMeetings } = useSidebar();
   const [creatingMeeting, setCreatingMeeting] = useState(false);
+  useEffect(() => {
+    warmRoutes.forEach(route => router.prefetch(route));
+    if (process.env.NODE_ENV !== 'development') return;
+
+    const timers = warmRoutes.map((route, index) => window.setTimeout(() => {
+      const cacheKey = `calmee.dev-route-warmed:${route}`;
+      if (window.sessionStorage.getItem(cacheKey) === 'true') return;
+      void fetch(route, { cache: 'no-store' })
+        .then(() => window.sessionStorage.setItem(cacheKey, 'true'))
+        .catch(() => undefined);
+    }, 1400 + index * 1100));
+
+    return () => timers.forEach(timer => window.clearTimeout(timer));
+  }, [router]);
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/';
     return pathname.startsWith(href);
@@ -79,6 +95,8 @@ export default function Sidebar() {
           type="button"
           aria-label={label}
           onClick={() => navigate(href)}
+          onPointerEnter={() => router.prefetch(href)}
+          onFocus={() => router.prefetch(href)}
           className={`group flex h-11 w-11 items-center justify-center rounded-2xl transition-colors ${
             isActive(href)
               ? 'bg-violet-100 text-violet-700 shadow-sm'

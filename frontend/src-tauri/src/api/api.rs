@@ -514,9 +514,17 @@ pub async fn api_save_transcript_provider_credentials<R: Runtime>(
             .await
             .map_err(|e| e.to_string())?;
     }
+    let stored_api_key = if provider == "funasr-server" {
+        api_key.as_deref().map(str::trim)
+    } else {
+        api_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+    };
     sqlx::query("INSERT INTO transcript_provider_credentials(provider,api_key,extra_json,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider) DO UPDATE SET api_key=COALESCE(excluded.api_key,transcript_provider_credentials.api_key),extra_json=excluded.extra_json,updated_at=CURRENT_TIMESTAMP")
         .bind(&provider)
-        .bind(api_key.as_deref().filter(|value| !value.trim().is_empty()).map(str::trim))
+        .bind(stored_api_key)
         .bind(serde_json::json!({"model": model.trim(), "credentials": credentials.unwrap_or_else(|| serde_json::json!({}))}).to_string())
         .execute(state.db_manager.pool()).await.map_err(|e| e.to_string())?;
     Ok(
@@ -1271,7 +1279,15 @@ mod llm_connection_test_tests {
 pub async fn api_test_transcript_connection(
     provider: String,
     api_key: String,
+    endpoint: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if provider == "funasr-server" {
+        return crate::remote_funasr::test_connection(
+            endpoint.as_deref().unwrap_or_default(),
+            api_key.trim(),
+        )
+        .await;
+    }
     if api_key.trim().is_empty() {
         return Err("API Key is required".to_string());
     }

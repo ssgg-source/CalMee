@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
 
@@ -356,9 +356,8 @@ pub async fn api_save_meeting_document<R: Runtime>(
     template_id: Option<String>,
 ) -> Result<MeetingDocument, String> {
     validate_kind(&kind)?;
-    if markdown.trim().is_empty() {
-        return Err("Document cannot be empty".into());
-    }
+    // Clearing a document is a valid edit. Rejecting an empty Markdown value
+    // makes auto-save fail exactly when the user deletes the final block.
     let context_key = context_key.unwrap_or_default();
     let language = language.unwrap_or_else(|| "auto".into());
     let now = Utc::now().to_rfc3339();
@@ -838,11 +837,213 @@ pub async fn api_get_meeting_audio_path<R: Runtime>(
     if !path.is_dir() {
         return Ok(None);
     }
+    let selected = find_meeting_audio_file(path);
+    if let Some(file) = selected.as_deref() {
+        app.asset_protocol_scope()
+            .allow_file(file)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(selected.map(|file| file.to_string_lossy().to_string()))
+}
+
+/// Create a seekable M4A playback copy for recordings produced by older
+/// CalMee builds. The original MP4 is deliberately retained as a rollback
+/// source; this command never modifies arbitrary imported audio files.
+#[tauri::command]
+pub async fn api_repair_legacy_meeting_audio<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<String, String> {
+    let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id=?")
+        .bind(&meeting_id)
+        .fetch_optional(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?
+        .flatten();
+    let folder = folder.ok_or_else(|| "Meeting audio folder is unavailable".to_string())?;
+    let stored_path = PathBuf::from(folder);
+    let folder = resolve_legacy_repair_folder(&stored_path)?;
+
+    let destination = folder.join("audio.m4a");
+    if destination
+        .metadata()
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+    {
+        app.asset_protocol_scope()
+            .allow_file(&destination)
+            .map_err(|error| error.to_string())?;
+        return Ok(destination.to_string_lossy().to_string());
+    }
+
+    let source = folder.join("audio.mp4");
+    if !source
+        .metadata()
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+    {
+        return Err("No legacy CalMee MP4 recording was found".to_string());
+    }
+
+    let repair_folder = folder.clone();
+    let repaired = tokio::task::spawn_blocking(move || repair_legacy_mp4(&repair_folder))
+        .await
+        .map_err(|error| format!("Audio repair task failed: {error}"))??;
+    // Older/manual attachment flows may have replaced the meeting folder with
+    // the concrete MP4 path. Restore the durable folder reference only after
+    // the repaired copy has been verified and activated.
+    if stored_path.is_file() {
+        sqlx::query("UPDATE meetings SET folder_path=?, updated_at=? WHERE id=?")
+            .bind(folder.to_string_lossy().to_string())
+            .bind(chrono::Utc::now())
+            .bind(&meeting_id)
+            .execute(state.db_manager.pool())
+            .await
+            .map_err(|error| {
+                format!("Audio was repaired, but its meeting link could not be updated: {error}")
+            })?;
+    }
+    app.asset_protocol_scope()
+        .allow_file(&repaired)
+        .map_err(|error| error.to_string())?;
+    Ok(repaired.to_string_lossy().to_string())
+}
+
+fn resolve_legacy_repair_folder(stored_path: &Path) -> Result<PathBuf, String> {
+    if stored_path.is_dir() {
+        return Ok(stored_path.to_path_buf());
+    }
+    let is_legacy_audio = stored_path.is_file()
+        && stored_path.file_name().and_then(|name| name.to_str()) == Some("audio.mp4");
+    let Some(parent) = stored_path.parent() else {
+        return Err("Only recordings managed by CalMee can be repaired".to_string());
+    };
+    if is_legacy_audio && parent.join("metadata.json").is_file() {
+        return Ok(parent.to_path_buf());
+    }
+    Err("Only recordings managed by CalMee can be repaired".to_string())
+}
+
+fn repair_legacy_mp4(folder: &Path) -> Result<PathBuf, String> {
+    let source = folder.join("audio.mp4");
+    let destination = folder.join("audio.m4a");
+    let temporary = folder.join(".audio-repair.m4a");
+    let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path()
+        .ok_or_else(|| "FFmpeg is unavailable; the recording was not changed".to_string())?;
+
+    let _ = std::fs::remove_file(&temporary);
+    let output = std::process::Command::new(ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-i",
+            source
+                .to_str()
+                .ok_or_else(|| "Invalid recording path".to_string())?,
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "ipod",
+            "-y",
+            temporary
+                .to_str()
+                .ok_or_else(|| "Invalid repair path".to_string())?,
+        ])
+        .output()
+        .map_err(|error| format!("Could not start audio repair: {error}"))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "Could not repair the playback copy: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if !temporary
+        .metadata()
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("The repaired playback copy was empty".to_string());
+    }
+    if destination.exists() {
+        std::fs::remove_file(&destination)
+            .map_err(|error| format!("Could not replace incomplete playback copy: {error}"))?;
+    }
+    std::fs::rename(&temporary, &destination)
+        .map_err(|error| format!("Could not activate repaired audio: {error}"))?;
+    if let Err(error) = update_metadata_audio_file(folder, "audio.m4a") {
+        log::warn!("Repaired audio is playable but metadata could not be updated: {error}");
+    }
+    Ok(destination)
+}
+
+fn update_metadata_audio_file(folder: &Path, audio_file: &str) -> Result<(), String> {
+    let metadata_path = folder.join("metadata.json");
+    if !metadata_path.is_file() {
+        return Ok(());
+    }
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    metadata["audio_file"] = serde_json::Value::String(audio_file.to_string());
+    let temporary = folder.join(".metadata.json.tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    std::fs::rename(temporary, metadata_path).map_err(|error| error.to_string())
+}
+
+fn find_meeting_audio_file(folder: &Path) -> Option<PathBuf> {
+    if let Ok(content) = std::fs::read_to_string(folder.join("metadata.json")) {
+        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(name) = metadata.get("audio_file").and_then(|value| value.as_str()) {
+                let relative = Path::new(name);
+                if relative.file_name() == Some(relative.as_os_str()) {
+                    let candidate = folder.join(relative);
+                    if candidate.is_file()
+                        && candidate
+                            .metadata()
+                            .map(|metadata| metadata.len() > 0)
+                            .unwrap_or(false)
+                    {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    for name in [
+        "audio.m4a",
+        "audio.mp4",
+        "audio.wav",
+        "audio.flac",
+        "audio.mp3",
+    ] {
+        let candidate = folder.join(name);
+        if candidate.is_file()
+            && candidate
+                .metadata()
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+    }
+
     let extensions = [
         "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "webm",
     ];
-    let mut candidates = std::fs::read_dir(path)
-        .map_err(|e| e.to_string())?
+    let mut candidates = std::fs::read_dir(folder)
+        .ok()?
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let file = entry.path();
@@ -851,17 +1052,103 @@ pub async fn api_get_meeting_audio_path<R: Runtime>(
                 return None;
             }
             let size = entry.metadata().ok()?.len();
-            Some((size, file.to_string_lossy().to_string()))
+            (size > 0).then_some((size, file))
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| right.0.cmp(&left.0));
-    let selected = candidates.into_iter().next().map(|(_, file)| file);
-    if let Some(file) = selected.as_deref() {
-        app.asset_protocol_scope()
-            .allow_file(file)
-            .map_err(|e| e.to_string())?;
+    candidates.into_iter().next().map(|(_, file)| file)
+}
+
+#[cfg(test)]
+mod meeting_audio_file_tests {
+    use super::{
+        find_meeting_audio_file, resolve_legacy_repair_folder, update_metadata_audio_file,
+    };
+
+    #[test]
+    fn metadata_audio_file_is_authoritative() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("audio.m4a"), b"new").unwrap();
+        std::fs::write(directory.path().join("other.mp4"), vec![0_u8; 128]).unwrap();
+        std::fs::write(
+            directory.path().join("metadata.json"),
+            r#"{"audio_file":"audio.m4a"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_meeting_audio_file(directory.path()).unwrap(),
+            directory.path().join("audio.m4a")
+        );
     }
-    Ok(selected)
+
+    #[test]
+    fn m4a_precedes_legacy_mp4_without_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("audio.mp4"), vec![0_u8; 128]).unwrap();
+        std::fs::write(directory.path().join("audio.m4a"), b"new").unwrap();
+
+        assert_eq!(
+            find_meeting_audio_file(directory.path()).unwrap(),
+            directory.path().join("audio.m4a")
+        );
+    }
+
+    #[test]
+    fn unsafe_metadata_path_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("audio.mp4"), b"legacy").unwrap();
+        std::fs::write(
+            directory.path().join("metadata.json"),
+            r#"{"audio_file":"../outside.m4a"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_meeting_audio_file(directory.path()).unwrap(),
+            directory.path().join("audio.mp4")
+        );
+    }
+
+    #[test]
+    fn metadata_audio_name_is_updated_without_losing_other_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("metadata.json"),
+            r#"{"meeting_name":"Design review","audio_file":"audio.mp4"}"#,
+        )
+        .unwrap();
+
+        update_metadata_audio_file(directory.path(), "audio.m4a").unwrap();
+
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.path().join("metadata.json")).unwrap())
+                .unwrap();
+        assert_eq!(metadata["meeting_name"], "Design review");
+        assert_eq!(metadata["audio_file"], "audio.m4a");
+    }
+
+    #[test]
+    fn legacy_managed_audio_file_resolves_back_to_its_meeting_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("audio.mp4");
+        std::fs::write(&audio, b"legacy audio").unwrap();
+        std::fs::write(directory.path().join("metadata.json"), b"{}").unwrap();
+
+        assert_eq!(
+            resolve_legacy_repair_folder(&audio).unwrap(),
+            directory.path()
+        );
+    }
+
+    #[test]
+    fn arbitrary_external_mp4_is_not_treated_as_a_managed_recording() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("audio.mp4");
+        std::fs::write(&audio, b"external audio").unwrap();
+
+        assert!(resolve_legacy_repair_folder(&audio).is_err());
+    }
 }
 
 #[tauri::command]

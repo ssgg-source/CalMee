@@ -59,7 +59,8 @@ export function CalendarSettings() {
     await save();
     setTesting(true);
     try {
-      toast.success(await invoke<string>("api_test_caldav"));
+      await invoke<string>("api_test_caldav");
+      toast.success(t("calendarSettings.connected"), { description: t("calendarSettings.connectionValidated") });
     } catch (error) {
       showError(t("calendarSettings.connectionFailed"), error);
     } finally {

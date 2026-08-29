@@ -1,6 +1,6 @@
 [package]
 name = "calmee"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 description = "Open-source local-first meeting transcription and notes app"
 authors = ["CalMee contributors"]
 license = "MIT"
@@ -107,7 +107,7 @@ thiserror = "2.0.16"                # Error handling for Parakeet
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
-tokio-util = "0.7"  # Utilities for tokio including CancellationToken
+tokio-util = { version = "0.7", features = ["io"] }  # CancellationToken and streamed uploads
 async-trait = "0.1"  # Trait abstraction for async methods
 
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }

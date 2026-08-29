@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "CalMee",
-    "version": "0.1.0-alpha.1",
+    "version": "0.1.0-alpha.2",
     "identifier": "io.github.ssgg-source.calmee",
     "build": {
         "frontendDist": "../out",
@@ -32,20 +32,21 @@
                 "style-src": "'self' 'unsafe-inline' http://localhost:3119",
                 "font-src": "'self' data: http://localhost:3119",
                 "img-src": "'self' asset: https://asset.localhost data: blob: http://localhost:3119",
-                "media-src": "'self' asset: https://asset.localhost blob: data: http://localhost:3119",
+                "media-src": "'self' asset: https://asset.localhost blob: data: http://localhost:3119 http://127.0.0.1:*",
                 "connect-src": "'self' http://localhost:3119 ws://localhost:3119 http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
             },
             "csp": {
                 "default-src": "'self'",
                 "style-src": "'self' 'unsafe-inline'",
                 "img-src": "'self' asset: https://asset.localhost data:",
-                "media-src": "'self' asset: https://asset.localhost blob: data:",
+                "media-src": "'self' asset: https://asset.localhost blob: data: http://127.0.0.1:*",
                 "connect-src": "'self' http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
             },
             "assetProtocol": {
                 "enable": true,
                 "scope": [
-                    "$APPDATA/**"
+                    "$APPDATA/**/*",
+                    "$VIDEO/calmee-recordings/**/*"
                 ]
             },
             "capabilities": [

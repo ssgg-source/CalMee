@@ -27,7 +27,7 @@ export function ParakeetModelManager({
   className = '',
   autoSave = false
 }: ParakeetModelManagerProps) {
-  const { locale } = useLanguage();
+  const { locale, t } = useLanguage();
   const [models, setModels] = useState<ParakeetModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +62,7 @@ export function ParakeetModelManager({
       } catch (err) {
         console.error('Failed to initialize Parakeet:', err);
         setError(err instanceof Error ? err.message : 'Failed to load models');
-        toast.error('Failed to load transcription models', {
+        toast.error(t('model.loadFailed'), {
           description: toUserFacingError(err, locale).message,
           duration: 5000
         });
@@ -217,12 +217,12 @@ export function ParakeetModelManager({
       // Clean up throttle data
       progressThrottleRef.current.delete(modelName);
 
-      toast.info(`${displayName} download cancelled`, {
+      toast.info(t('model.downloadCancelled', { model: displayName }), {
         duration: 3000
       });
     } catch (err) {
       console.error('Failed to cancel download:', err);
-      toast.error('Failed to cancel download', {
+      toast.error(t('model.cancelDownloadFailed'), {
         description: toUserFacingError(err, locale).message,
         duration: 4000
       });
@@ -246,8 +246,8 @@ export function ParakeetModelManager({
         )
       );
 
-      toast.info(`Downloading ${displayName}...`, {
-        description: 'This may take a few minutes',
+      toast.info(t('model.downloading', { model: displayName }), {
+        description: t('model.downloadWait'),
         duration: 5000  // Auto-dismiss after 5 seconds
       });
 
@@ -280,7 +280,7 @@ export function ParakeetModelManager({
 
     const displayInfo = getModelDisplayInfo(modelName);
     const displayName = displayInfo?.friendlyName || modelName;
-    toast.success(`Switched to ${displayName}`, {
+    toast.success(t('model.switched', { model: displayName }), {
       duration: 3000
     });
   };
@@ -296,8 +296,8 @@ export function ParakeetModelManager({
       const modelList = await ParakeetAPI.getAvailableModels();
       setModels(modelList);
 
-      toast.success(`${displayName} deleted`, {
-        description: 'Model removed to free up space',
+      toast.success(t('model.deleted', { model: displayName }), {
+        description: t('model.removedSpace'),
         duration: 3000
       });
 
@@ -307,7 +307,7 @@ export function ParakeetModelManager({
       }
     } catch (err) {
       console.error('Failed to delete model:', err);
-      toast.error(`Failed to delete ${displayName}`, {
+      toast.error(t('model.deleteFailed', { model: displayName }), {
         description: toUserFacingError(err, locale).message,
         duration: 4000
       });

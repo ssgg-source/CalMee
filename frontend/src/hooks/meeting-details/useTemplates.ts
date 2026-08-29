@@ -14,6 +14,17 @@ const TEMPLATE_KEYS: Record<string, { name: TranslationKey; description: Transla
   standard_meeting: { name: 'templates.standard_meeting.name', description: 'templates.standard_meeting.description' },
 };
 
+type TemplateItem = { id: string; name: string; description: string };
+let templateRequest: Promise<TemplateItem[]> | null = null;
+
+function loadTemplates() {
+  if (!templateRequest) {
+    templateRequest = invokeTauri('api_list_templates') as Promise<TemplateItem[]>;
+    templateRequest.catch(() => { templateRequest = null; });
+  }
+  return templateRequest;
+}
+
 export function useTemplates() {
   const { t } = useLanguage();
   const [availableTemplates, setAvailableTemplates] = useState<Array<{
@@ -27,11 +38,7 @@ export function useTemplates() {
   useEffect(() => {
     const fetchTemplates = async () => {
       try {
-        const templates = await invokeTauri('api_list_templates') as Array<{
-          id: string;
-          name: string;
-          description: string;
-        }>;
+        const templates = await loadTemplates();
         console.log('Available templates:', templates);
         setAvailableTemplates(templates.map(template => {
           const keys = TEMPLATE_KEYS[template.id];
