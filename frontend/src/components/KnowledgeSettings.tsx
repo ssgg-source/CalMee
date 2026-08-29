@@ -16,6 +16,26 @@ type Hotword = { id: string; term: string; category: string; enabled: boolean; u
 type LegacyPreview = { affectedRows: number; sourceDescription: string; sharedSourceIsReadOnly: boolean };
 type Section = "people" | "terms";
 type PendingConfirm = { kind: "people" | "terms" | "legacy"; ids?: string[]; count: number };
+type KnowledgeSnapshot = { people: Person[]; hotwords: Hotword[]; legacy: LegacyPreview };
+
+let knowledgeSnapshot: KnowledgeSnapshot | null = null;
+let knowledgeRequest: Promise<KnowledgeSnapshot> | null = null;
+
+const fetchKnowledgeSnapshot = () => {
+  if (knowledgeRequest) return knowledgeRequest;
+  knowledgeRequest = Promise.all([
+    invoke<Person[]>("api_list_people"),
+    invoke<Hotword[]>("api_list_hotwords"),
+    invoke<LegacyPreview>("api_preview_legacy_hotword_disposition"),
+  ]).then(([people, hotwords, legacy]) => ({
+    people,
+    hotwords: hotwords.map((item) => ({ ...item, tags: item.tags || [item.category].filter(Boolean) })),
+    legacy,
+  })).finally(() => {
+    knowledgeRequest = null;
+  });
+  return knowledgeRequest;
+};
 
 export function KnowledgeSettings() {
   const { locale } = useLanguage();
@@ -42,17 +62,22 @@ export function KnowledgeSettings() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const load = async () => {
+  const load = async (force = false) => {
+    if (!force && knowledgeSnapshot) {
+      setPeople(knowledgeSnapshot.people);
+      setHotwords(knowledgeSnapshot.hotwords);
+      setLegacy(knowledgeSnapshot.legacy);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const [nextPeople, nextTerms, nextLegacy] = await Promise.all([
-        invoke<Person[]>("api_list_people"),
-        invoke<Hotword[]>("api_list_hotwords"),
-        invoke<LegacyPreview>("api_preview_legacy_hotword_disposition"),
-      ]);
-      setPeople(nextPeople);
-      setHotwords(nextTerms.map((item) => ({ ...item, tags: item.tags || [item.category].filter(Boolean) })));
-      setLegacy(nextLegacy);
+      if (force) knowledgeSnapshot = null;
+      const snapshot = await fetchKnowledgeSnapshot();
+      knowledgeSnapshot = snapshot;
+      setPeople(snapshot.people);
+      setHotwords(snapshot.hotwords);
+      setLegacy(snapshot.legacy);
     } catch (error) {
       reportTechnicalError("knowledge-load", error);
       toast.error(zh ? "数据加载失败" : "Could not load data", { description: toUserFacingError(error, locale).message });
@@ -98,7 +123,7 @@ export function KnowledgeSettings() {
     try {
       await invoke("api_create_person", { name: personName.trim() });
       setPersonName("");
-      await load();
+      await load(true);
     } catch (error) {
       reportTechnicalError("knowledge-person-create", error);
       toast.error(zh ? "新建失败" : "Could not add person", { description: toUserFacingError(error, locale).message });
@@ -112,7 +137,7 @@ export function KnowledgeSettings() {
     try {
       await invoke("api_upsert_hotword", { term: term.trim(), replacementFrom: null, category: termTag.trim() || null });
       setTerm("");
-      await load();
+      await load(true);
     } catch (error) {
       reportTechnicalError("knowledge-term-create", error);
       toast.error(zh ? "添加失败" : "Could not add term", { description: toUserFacingError(error, locale).message });
@@ -122,7 +147,7 @@ export function KnowledgeSettings() {
     if (!ids.length) return;
     await invoke("api_set_hotwords_enabled", { ids, enabled });
     setSelectedTerms(new Set());
-    await load();
+    await load(true);
   };
   const removeTerms = async (ids: string[]) => {
     if (ids.length) setPendingConfirm({ kind: "terms", ids, count: ids.length });
@@ -133,7 +158,7 @@ export function KnowledgeSettings() {
     toast.success(zh ? `已导入 ${count} 个词` : `Imported ${count} terms`);
     setBulk("");
     setBulkOpen(false);
-    await load();
+    await load(true);
   };
   const addBatchTag = async () => {
     const tag = batchTag.trim();
@@ -141,7 +166,7 @@ export function KnowledgeSettings() {
     await Promise.all(selectedTermRows.map((item) => invoke("api_set_hotwords_tags", { ids: [item.id], tags: Array.from(new Set([...item.tags, tag])) })));
     setBatchTag("");
     setTagDialog(false);
-    await load();
+    await load(true);
   };
   const resolveLegacy = async (action: "keep" | "delete") => {
     if (!legacy?.affectedRows || resolvingLegacy) return;
@@ -153,7 +178,7 @@ export function KnowledgeSettings() {
     try {
       await invoke("api_apply_legacy_hotword_disposition", { disposition: { action, expectedRows: legacy.affectedRows, confirmed: true } });
       toast.success(action === "keep" ? (zh ? "已保留这批词库" : "Legacy terms kept") : (zh ? "已删除这批旧词库" : "Legacy terms removed"));
-      await load();
+      await load(true);
     } catch (error) {
       reportTechnicalError("knowledge-legacy-resolution", error);
       toast.error(zh ? "处置失败，未更改任何记录" : "No records were changed", { description: toUserFacingError(error, locale).message });
@@ -177,7 +202,7 @@ export function KnowledgeSettings() {
         toast.success(zh ? "已删除这批旧词库" : "Legacy terms removed");
       }
       setPendingConfirm(null);
-      await load();
+      await load(true);
     } catch (error) {
       reportTechnicalError("knowledge-delete", error);
       toast.error(zh ? "删除失败，未更改相关记录" : "Delete failed; related records were not changed", { description: toUserFacingError(error, locale).message });
@@ -186,7 +211,7 @@ export function KnowledgeSettings() {
     }
   };
 
-  if (selectedPerson) return <PersonDetailView personId={selectedPerson} onBack={() => { setSelectedPerson(null); void load(); }} />;
+  if (selectedPerson) return <PersonDetailView personId={selectedPerson} onBack={() => { setSelectedPerson(null); void load(true); }} />;
 
   return (
     <section>

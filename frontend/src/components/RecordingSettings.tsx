@@ -24,10 +24,11 @@ interface RecordingSettingsProps {
 
 export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const { lt, locale } = useLanguage();
+  const zh = locale === 'zh-CN';
   const [preferences, setPreferences] = useState<RecordingPreferences>({
     save_folder: '',
     auto_save: true,
-    file_format: 'mp4',
+    file_format: 'm4a',
     preferred_mic_device: null,
     preferred_system_device: null
   });
@@ -189,8 +190,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
                 {lt('Open Folder')}
               </ProductButton>
               <div className="mt-3 rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-                <strong className="text-foreground">{lt('File Format:')}</strong> {preferences.file_format.toUpperCase()} {lt('files')}
-                <div>{lt('Recordings are saved with timestamp: {pattern}', { pattern: `recording_YYYYMMDD_HHMMSS.${preferences.file_format}` })}</div>
+                <strong className="text-foreground">{zh ? '录音格式：' : 'Recording format:'}</strong> M4A（AAC）
+                <div>{zh ? '每段录音会独立保留，并生成可直接播放的 audio.m4a。' : 'Each segment is preserved and a seekable audio.m4a is generated for playback.'}</div>
               </div>
             </div>
           ) : (

@@ -343,11 +343,10 @@ async fn run_import<R: Runtime>(
     if !transcribe {
         emit_progress(&app, "saving", 65, "Creating meeting...");
         let path_for_probe = dest_path.clone();
-        let duration_seconds = tokio::task::spawn_blocking(move || {
-            probe_audio_duration(&path_for_probe)
-        })
-        .await
-        .map_err(|error| anyhow!("Audio metadata task join error: {}", error))??;
+        let duration_seconds =
+            tokio::task::spawn_blocking(move || probe_audio_duration(&path_for_probe))
+                .await
+                .map_err(|error| anyhow!("Audio metadata task join error: {}", error))??;
 
         let app_state = app
             .try_state::<AppState>()
@@ -745,6 +744,7 @@ async fn run_import<R: Runtime>(
             app_state.db_manager.pool(),
             &meeting_id,
             &funasr_speaker_embeddings,
+            None,
         )
         .await
         {
@@ -1072,20 +1072,19 @@ pub async fn select_and_validate_audio_command<R: Runtime>(
 ) -> Result<Option<AudioFileInfo>, String> {
     info!("Opening file dialog for audio import");
 
-    // Use spawn_blocking to avoid blocking async runtime
-    let app_clone = app.clone();
-    let file_path = tokio::task::spawn_blocking(move || {
-        app_clone
-            .dialog()
-            .file()
-            .add_filter(
-                "Audio Files",
-                &AUDIO_EXTENSIONS.iter().map(|s| *s).collect::<Vec<_>>(),
-            )
-            .blocking_pick_file()
-    })
-    .await
-    .map_err(|e| format!("File dialog task failed: {}", e))?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter(
+            "Audio Files",
+            &AUDIO_EXTENSIONS.iter().map(|s| *s).collect::<Vec<_>>(),
+        )
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let file_path = receiver
+        .await
+        .map_err(|_| "The audio file picker closed unexpectedly.".to_string())?;
 
     match file_path {
         Some(path) => {
@@ -1104,17 +1103,32 @@ pub async fn select_and_validate_audio_command<R: Runtime>(
                         })?;
 
                     if let Some(meeting_id) = meeting_id.as_deref() {
-                        let result = sqlx::query(
-                            "UPDATE meetings SET folder_path = ?, updated_at = ? WHERE id = ?",
-                        )
-                        .bind(&path_str)
-                        .bind(chrono::Utc::now())
-                        .bind(meeting_id)
-                        .execute(state.db_manager.pool())
-                        .await
-                        .map_err(|error| format!("Unable to attach audio to meeting: {}", error))?;
-                        if result.rows_affected() == 0 {
+                        let existing: Option<Option<String>> =
+                            sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+                                .bind(meeting_id)
+                                .fetch_optional(state.db_manager.pool())
+                                .await
+                                .map_err(|error| {
+                                    format!("Unable to inspect meeting audio: {}", error)
+                                })?;
+                        let Some(existing) = existing else {
                             return Err("Meeting not found while attaching audio".to_string());
+                        };
+                        // A managed recording folder owns metadata, recovery
+                        // segments and transcripts. Selecting a playback file
+                        // must never replace that folder reference with a file.
+                        if !existing.as_deref().map(Path::new).is_some_and(Path::is_dir) {
+                            sqlx::query(
+                                "UPDATE meetings SET folder_path = ?, updated_at = ? WHERE id = ?",
+                            )
+                            .bind(&path_str)
+                            .bind(chrono::Utc::now())
+                            .bind(meeting_id)
+                            .execute(state.db_manager.pool())
+                            .await
+                            .map_err(|error| {
+                                format!("Unable to attach audio to meeting: {}", error)
+                            })?;
                         }
                     }
 

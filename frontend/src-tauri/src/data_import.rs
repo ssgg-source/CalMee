@@ -385,13 +385,20 @@ pub fn api_get_default_legacy_calmee_source<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn api_select_legacy_calmee_source<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+pub async fn api_select_legacy_calmee_source<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
         .add_filter("CalMee database", &["sqlite", "db"])
-        .blocking_pick_file()
-        .map(|path| path.to_string())
+        .pick_file(move |path| {
+            let _ = sender.send(path.map(|path| path.to_string()));
+        });
+    receiver
+        .await
+        .map_err(|_| "The database file picker closed unexpectedly.".to_string())
 }
 
 #[tauri::command]

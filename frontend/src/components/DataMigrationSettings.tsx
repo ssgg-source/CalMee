@@ -37,6 +37,7 @@ export function DataMigrationSettings() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selecting, setSelecting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [includeAudioReferences, setIncludeAudioReferences] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -46,12 +47,21 @@ export function DataMigrationSettings() {
   }, []);
 
   const selectSource = async () => {
-    const path = await invoke<string | null>("api_select_legacy_calmee_source");
-    if (path) {
-      setSourcePath(path);
-      setPreview(null);
-      setReport(null);
-      setConfirmed(false);
+    if (selecting) return;
+    setSelecting(true);
+    try {
+      const path = await invoke<string | null>("api_select_legacy_calmee_source");
+      if (path) {
+        setSourcePath(path);
+        setPreview(null);
+        setReport(null);
+        setConfirmed(false);
+      }
+    } catch (error) {
+      reportTechnicalError("data-migration-file-picker", error);
+      toast.error(zh ? "无法打开数据库文件" : "Could not open the database file", { description: toUserFacingError(error, locale).message });
+    } finally {
+      setSelecting(false);
     }
   };
   const loadPreview = async () => {
@@ -94,7 +104,7 @@ export function DataMigrationSettings() {
           <p className="text-[11px] font-medium text-foreground">{zh ? "来源数据库（只读）" : "Source database (read-only)"}</p>
           <p className="mt-2 break-all font-mono text-[11px] leading-5 text-muted-foreground">{sourcePath || (zh ? "尚未选择" : "Not selected")}</p>
           <div className="mt-3 flex gap-2">
-            <ProductButton size="sm" onClick={() => void selectSource()}><FolderOpen className="h-4 w-4" />{zh ? "选择文件" : "Choose file"}</ProductButton>
+            <ProductButton size="sm" onClick={() => void selectSource()} disabled={selecting}>{selecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}{selecting ? (zh ? "正在选择…" : "Choosing…") : (zh ? "选择文件" : "Choose file")}</ProductButton>
             <ProductButton size="sm" variant="primary" onClick={() => void loadPreview()} disabled={!sourcePath || loading}>{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSearch className="h-4 w-4" />}{zh ? "只读预览" : "Preview read-only"}</ProductButton>
           </div>
         </div>

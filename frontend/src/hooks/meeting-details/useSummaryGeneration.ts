@@ -14,6 +14,7 @@ import {
 } from '@/lib/summary-language-preferences';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { getMeetingSummary, invalidateMeetingSummary } from '@/lib/meeting-summary';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -104,7 +105,7 @@ export function useSummaryGeneration({
     let timer: number | undefined;
     const restoreBackgroundTask = async () => {
       try {
-        const result = await invokeTauri('api_get_summary', { meetingId: meeting.id }) as any;
+        const result = await getMeetingSummary(meeting.id);
         if (!active) return;
         if (result.status === 'pending' || result.status === 'processing') {
           setSummaryStatus('processing');
@@ -230,9 +231,8 @@ export function useSummaryGeneration({
 
           // Reload summary from database (backend has already restored from backup)
           try {
-            const existingSummary = await invokeTauri('api_get_summary', {
-              meetingId: meeting.id
-            }) as any;
+            invalidateMeetingSummary(meeting.id);
+            const existingSummary = await getMeetingSummary(meeting.id, true);
 
             if (existingSummary?.data) {
               console.log('Restored previous summary after cancellation');
@@ -259,9 +259,8 @@ export function useSummaryGeneration({
           // If this was a regeneration, try to restore previous summary from database
           if (isRegeneration) {
             try {
-              const existingSummary = await invokeTauri('api_get_summary', {
-                meetingId: meeting.id
-              }) as any;
+              invalidateMeetingSummary(meeting.id);
+              const existingSummary = await getMeetingSummary(meeting.id, true);
 
               if (existingSummary?.data) {
                 console.log('Restored previous summary after regeneration failure');

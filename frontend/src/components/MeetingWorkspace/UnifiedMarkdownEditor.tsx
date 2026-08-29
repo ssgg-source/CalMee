@@ -8,6 +8,7 @@ import { BlockNoteView } from '@blocknote/shadcn';
 import {
   AddBlockButton,
   blockTypeSelectItems,
+  DragHandleButton,
   getFormattingToolbarItems,
   FormattingToolbar,
   FormattingToolbarController,
@@ -22,7 +23,6 @@ import {
 import '@blocknote/shadcn/style.css';
 import '@blocknote/core/fonts/inter.css';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { GripVertical } from 'lucide-react';
 
 export interface UnifiedMarkdownEditorRef {
   getMarkdown: () => Promise<string>;
@@ -52,32 +52,61 @@ type FormattingFloatingOptions = NonNullable<
   };
 };
 
-function CompactSideMenu(props: SideMenuProps) {
+type CompactBlockTypeItem = ReturnType<typeof blockTypeSelectItems>[number];
+
+function CompactBlockMenu({
+  block,
+  editor,
+  items,
+}: {
+  block: SideMenuProps['block'];
+  editor: SideMenuProps['editor'];
+  items: CompactBlockTypeItem[];
+}) {
   const { locale } = useLanguage();
-  const dragLabel = locale === 'zh-CN' ? '拖动内容块' : 'Drag block';
+  const headingItems = items.filter(item => item.type === 'paragraph' || item.type === 'heading');
+  const structureItems = items.filter(item => !headingItems.includes(item));
+  const renderItems = (sectionItems: CompactBlockTypeItem[]) => (
+    <div className="calmee-insert-menu-grid">
+      {sectionItems.map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={`${item.type}-${JSON.stringify(item.props || {})}`}
+            type="button"
+            aria-label={item.name}
+            title={item.name}
+            className={`calmee-insert-menu-item ${item.isSelected(block as any) ? 'calmee-insert-menu-item--selected' : ''}`}
+            onClick={() => {
+              editor.updateBlock(block, { type: item.type as any, props: item.props as any });
+              editor.focus();
+            }}
+          >
+            <span className="calmee-insert-menu-icon"><Icon /></span>
+          </button>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="calmee-insert-menu" role="menu" aria-label={locale === 'zh-CN' ? '内容块格式' : 'Block format'}>
+      <section className="calmee-insert-menu-section" aria-label={locale === 'zh-CN' ? '文本结构' : 'Text structure'}>
+        {renderItems(headingItems)}
+      </section>
+      <section className="calmee-insert-menu-section" aria-label={locale === 'zh-CN' ? '列表与引用' : 'Lists and quote'}>
+        {renderItems(structureItems)}
+      </section>
+    </div>
+  );
+}
+
+function CompactSideMenu({ items, ...props }: SideMenuProps & { items: CompactBlockTypeItem[] }) {
   return (
     <SideMenu {...props}>
       <AddBlockButton block={props.block} />
-      <button
-        type="button"
-        draggable
-        aria-label={dragLabel}
-        title={dragLabel}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-        onDragStart={(event) => {
-          props.blockDragStart(
-            { dataTransfer: event.dataTransfer, clientY: event.clientY },
-            props.block,
-          );
-        }}
-        onDragEnd={() => props.blockDragEnd()}
-        className="flex h-[22px] w-[18px] cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:cursor-grabbing"
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
+      <DragHandleButton {...props}>
+        <CompactBlockMenu block={props.block} editor={props.editor} items={items} />
+      </DragHandleButton>
     </SideMenu>
   );
 }
@@ -106,13 +135,13 @@ function CompactSuggestionMenu({
             type="button"
             role="option"
             aria-selected={selectedIndex === index}
+            aria-label={item.title}
+            title={item.title}
             className="calmee-insert-menu-item"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onItemClick?.(item)}
           >
             <span className="calmee-insert-menu-icon">{item.icon}</span>
-            <span className="min-w-0 truncate">{item.title}</span>
-            <span className="calmee-insert-menu-enter" aria-hidden="true">↵</span>
           </button>
         );
       })}
@@ -126,18 +155,12 @@ function CompactSuggestionMenu({
       aria-label={locale === 'zh-CN' ? '插入内容' : 'Insert content'}
     >
       {headingItems.length > 0 && (
-        <section className="calmee-insert-menu-section">
-          <div className="calmee-insert-menu-label">
-            {locale === 'zh-CN' ? '文本结构' : 'Text structure'}
-          </div>
+        <section role="group" className="calmee-insert-menu-section" aria-label={locale === 'zh-CN' ? '文本结构' : 'Text structure'}>
           {renderItems(headingItems)}
         </section>
       )}
       {structureItems.length > 0 && (
-        <section className="calmee-insert-menu-section">
-          <div className="calmee-insert-menu-label">
-            {locale === 'zh-CN' ? '列表与引用' : 'Lists & quote'}
-          </div>
+        <section role="group" className="calmee-insert-menu-section" aria-label={locale === 'zh-CN' ? '列表与引用' : 'Lists and quote'}>
           {renderItems(structureItems)}
         </section>
       )}
@@ -230,6 +253,12 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
       .filter((item) => order.has(item.title))
       .sort((left, right) => order.get(left.title)! - order.get(right.title)!);
   }, [editor]);
+  const compactSideMenu = useMemo(
+    () => function CalMeeSideMenu(props: SideMenuProps) {
+      return <CompactSideMenu {...props} items={compactBlockTypeItems} />;
+    },
+    [compactBlockTypeItems],
+  );
 
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => { dirtyRef.current = onDirtyChange; }, [onDirtyChange]);
@@ -262,7 +291,13 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
 
       // A normal text block is the end of the heading-demotion chain. Lists
       // retain BlockNote's Notion-style Tab/Shift+Tab nesting behavior.
-      if (block.type === 'paragraph') event.preventDefault();
+      if (block.type === 'paragraph') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          editor.updateBlock(block, { type: 'heading', props: { level: 4 } });
+          editor.focus();
+        }
+      }
     };
     element?.addEventListener('keydown', handleTab, true);
     return () => element?.removeEventListener('keydown', handleTab, true);
@@ -396,7 +431,7 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
         slashMenu={false}
         formattingToolbar={false}
       >
-        <SideMenuController sideMenu={CompactSideMenu} />
+        <SideMenuController sideMenu={compactSideMenu} />
         <SuggestionMenuController
           triggerCharacter="/"
           getItems={async (query) => filterSuggestionItems(compactSlashItems, query)}

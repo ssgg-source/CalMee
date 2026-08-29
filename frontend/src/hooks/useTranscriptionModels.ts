@@ -8,7 +8,7 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: 'whisper' | 'parakeet' | 'funasr' | 'qwen3asr';
+  provider: 'whisper' | 'parakeet' | 'funasr' | 'qwen3asr' | 'funasr-server';
   name: string;
   displayName: string;
   size_mb: number;
@@ -131,6 +131,22 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
       console.error('Failed to fetch Qwen3-ASR models:', err);
     }
 
+    try {
+      const profile = await invoke<{ model?: string; credentials?: Record<string, string> }>('api_get_transcript_provider_credentials', { provider: 'funasr-server' });
+      if (profile.model && profile.credentials?.endpoint) {
+        allModels.push({
+          provider: 'funasr-server',
+          name: profile.model,
+          displayName: `🌐 FunASR Server: ${profile.model}`,
+          size_mb: 0,
+          capabilities: ['timestamps', 'multilingual', 'punctuation', 'itn'],
+          languages: 'Server-defined',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch FunASR server configuration:', err);
+    }
+
     setAvailableModels(allModels);
 
     // Set default model based on user's saved configuration
@@ -144,7 +160,8 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
         (configuredProvider === 'localWhisper' && m.provider === 'whisper' && m.name === configuredModel) ||
         (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel) ||
         (configuredProvider === 'funasr' && m.provider === 'funasr' && m.name === configuredModel) ||
-        (configuredProvider === 'qwen3asr' && m.provider === 'qwen3asr' && m.name === configuredModel)
+        (configuredProvider === 'qwen3asr' && m.provider === 'qwen3asr' && m.name === configuredModel) ||
+        (configuredProvider === 'funasr-server' && m.provider === 'funasr-server' && m.name === configuredModel)
     );
 
     // Only set default model if user hasn't manually selected one

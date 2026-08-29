@@ -275,7 +275,7 @@ export function useRecordingStop(
 
         try {
           const responseData = await storageService.saveMeeting(
-            meetingTitle || savedMeetingName || 'New Meeting',
+            savedMeetingName || meetingTitle || 'New Meeting',
             freshTranscripts,
             folderPath
           );

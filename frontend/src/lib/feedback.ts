@@ -66,3 +66,24 @@ export function progressDescription(stage: string, percentage: number | null) {
   if (percentage == null || percentage <= 0 || percentage >= 100) return stage;
   return `${stage} — ${percentage}%`;
 }
+
+export function transcriptionProgressLabel(stage: string | undefined, locale: AppLocale) {
+  const zh = locale === 'zh-CN';
+  switch (stage) {
+    case 'decoding':
+    case 'preparing': return zh ? '正在准备音频' : 'Preparing audio';
+    case 'uploading': return zh ? '正在上传录音' : 'Uploading recording';
+    case 'server_submitting': return zh ? '正在创建服务器转写任务' : 'Creating server transcription job';
+    case 'server_queued': return zh ? '转写任务正在服务器排队' : 'Transcription job is queued on the server';
+    case 'server_processing': return zh ? '服务器正在识别语音并区分讲话人（估算进度）' : 'Server is recognizing speech and identifying speakers (estimated progress)';
+    case 'vad': return zh ? '正在检测有效语音' : 'Detecting speech';
+    case 'loading_model': return zh ? '正在加载识别模型' : 'Loading ASR model';
+    case 'analyzing_audio': return zh ? '模型已就绪，正在分析音频' : 'Model ready, analyzing audio';
+    case 'recognizing':
+    case 'transcribing': return zh ? '正在识别语音' : 'Recognizing speech';
+    case 'diarizing': return zh ? '正在区分讲话人' : 'Identifying speakers';
+    case 'saving': return zh ? '正在整理并保存文字稿' : 'Organizing and saving transcript';
+    case 'complete': return zh ? '正在完成转写' : 'Finishing transcription';
+    default: return zh ? '正在处理录音' : 'Processing recording';
+  }
+}

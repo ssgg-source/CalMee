@@ -30,7 +30,7 @@ export function ModelManager({
   className = '',
   autoSave = false
 }: ModelManagerProps) {
-  const { locale } = useLanguage();
+  const { locale, t } = useLanguage();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +110,7 @@ export function ModelManager({
       } catch (err) {
         console.error('Failed to initialize Whisper:', err);
         setError(err instanceof Error ? err.message : 'Failed to load models');
-        toast.error('Failed to load transcription models', {
+        toast.error(t('model.loadFailed'), {
           description: toUserFacingError(err, locale).message,
           duration: 5000
         });
@@ -184,8 +184,8 @@ export function ModelManager({
           // Clean up throttle data
           progressThrottleRef.current.delete(modelName);
 
-          toast.success(`${getModelIcon(model?.accuracy || 'Good')} ${displayName} ready!`, {
-            description: 'Model downloaded and ready to use',
+          toast.success(t('model.ready', { model: displayName }), {
+            description: t('model.downloadedReady'),
             duration: 4000
           });
 
@@ -223,11 +223,11 @@ export function ModelManager({
           // Clean up throttle data
           progressThrottleRef.current.delete(modelName);
 
-          toast.error(`Failed to download ${displayName}`, {
+          toast.error(t('model.downloadFailed', { model: displayName }), {
             description: toUserFacingError(error, locale).message,
             duration: 6000,
             action: {
-              label: 'Retry',
+              label: t('common.retry'),
               onClick: () => downloadModel(modelName)
             }
           });
@@ -280,12 +280,12 @@ export function ModelManager({
       // Clean up throttle data
       progressThrottleRef.current.delete(modelName);
 
-      toast.info(`${displayName} download cancelled`, {
+      toast.info(t('model.downloadCancelled', { model: displayName }), {
         duration: 3000
       });
     } catch (err) {
       console.error('Failed to cancel download:', err);
-      toast.error('Failed to cancel download', {
+      toast.error(t('model.cancelDownloadFailed'), {
         description: toUserFacingError(err, locale).message,
         duration: 4000
       });
@@ -308,8 +308,8 @@ export function ModelManager({
         )
       );
 
-      toast.info(`Downloading ${displayName}...`, {
-        description: 'This may take a few minutes',
+      toast.info(t('model.downloading', { model: displayName }), {
+        description: t('model.downloadWait'),
         duration: 5000
       });
 
@@ -343,7 +343,7 @@ export function ModelManager({
     }
 
     const displayName = getDisplayName(modelName);
-    toast.success(`Switched to ${displayName}`, {
+    toast.success(t('model.switched', { model: displayName }), {
       duration: 3000
     });
   };
@@ -358,8 +358,8 @@ export function ModelManager({
       const modelList = await WhisperAPI.getAvailableModels();
       setModels(modelList);
 
-      toast.success(`${displayName} deleted`, {
-        description: 'Model removed to free up space',
+      toast.success(t('model.deleted', { model: displayName }), {
+        description: t('model.removedSpace'),
         duration: 3000
       });
 
@@ -369,7 +369,7 @@ export function ModelManager({
       }
     } catch (err) {
       console.error('Failed to delete model:', err);
-      toast.error(`Failed to delete ${displayName}`, {
+      toast.error(t('model.deleteFailed', { model: displayName }), {
         description: toUserFacingError(err, locale).message,
         duration: 4000
       });

@@ -647,6 +647,41 @@
   transition: opacity 140ms ease;
 }
 
+/* Heading blocks use progressively larger top margins. The side menu is
+   anchored to the block box, so compensate per level to keep the plus and
+   six-dot drag handle aligned with the first text line after Tab changes. */
+.calmee-blocknote-editor .bn-side-menu[data-block-type="heading"][data-level="1"] {
+  transform: translate(5px, 18px);
+}
+
+.calmee-blocknote-editor .bn-side-menu[data-block-type="heading"][data-level="2"] {
+  transform: translate(5px, 15px);
+}
+
+.calmee-blocknote-editor .bn-side-menu[data-block-type="heading"][data-level="3"] {
+  transform: translate(5px, 12px);
+}
+
+.calmee-blocknote-editor .bn-side-menu[data-block-type="heading"][data-level="4"] {
+  transform: translate(5px, 10px);
+}
+
+.calmee-blocknote-editor--compact .bn-side-menu[data-block-type="heading"][data-level="1"] {
+  transform: translate(5px, 7px);
+}
+
+.calmee-blocknote-editor--compact .bn-side-menu[data-block-type="heading"][data-level="2"] {
+  transform: translate(5px, 6px);
+}
+
+.calmee-blocknote-editor--compact .bn-side-menu[data-block-type="heading"][data-level="3"] {
+  transform: translate(5px, 5px);
+}
+
+.calmee-blocknote-editor--compact .bn-side-menu[data-block-type="heading"][data-level="4"] {
+  transform: translate(5px, 4px);
+}
+
 .calmee-blocknote-editor .bn-block-outer:hover .bn-side-menu,
 .calmee-blocknote-editor .bn-side-menu:hover {
   opacity: 1;
@@ -717,7 +752,8 @@
 
 /* WPS-inspired insertion menu: compact commands, visible grouping, no cards. */
 .calmee-insert-menu {
-  width: 276px;
+  width: max-content;
+  max-width: 214px;
   padding: 6px;
   overflow: hidden auto;
   color: #334155;
@@ -729,33 +765,24 @@
 }
 
 .calmee-insert-menu-section + .calmee-insert-menu-section {
-  margin-top: 5px;
-  padding-top: 5px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid #eef2f7;
-}
-
-.calmee-insert-menu-label {
-  padding: 3px 7px 5px;
-  color: #94a3b8;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: .06em;
 }
 
 .calmee-insert-menu-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(5, 34px);
   gap: 2px;
 }
 
 .calmee-insert-menu-item {
   display: flex;
-  height: 32px;
-  min-width: 0;
+  width: 34px;
+  height: 34px;
   align-items: center;
-  gap: 6px;
-  padding: 0 7px 0 6px;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   color: #475569;
@@ -769,6 +796,7 @@
 }
 
 .calmee-insert-menu-item:hover,
+.calmee-insert-menu-item--selected,
 .calmee-insert-menu-item[aria-selected="true"] {
   color: #5b21b6;
   background: #f3f0ff;
@@ -785,9 +813,9 @@
 
 .calmee-insert-menu-icon {
   display: flex;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
   align-items: center;
   justify-content: center;
   color: #64748b;
@@ -796,25 +824,14 @@
 }
 
 .calmee-insert-menu-item[aria-selected="true"] .calmee-insert-menu-icon,
+.calmee-insert-menu-item--selected .calmee-insert-menu-icon,
 .calmee-insert-menu-item:hover .calmee-insert-menu-icon {
   color: #7c3aed;
 }
 
 .calmee-insert-menu-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
-.calmee-insert-menu-enter {
-  margin-left: auto;
-  color: #cbd5e1;
-  font-size: 10px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.calmee-insert-menu-item[aria-selected="true"] .calmee-insert-menu-enter {
-  opacity: 1;
+  width: 15px;
+  height: 15px;
 }
 
 /* Selection toolbar includes block level, text attributes, colors and alignment. */

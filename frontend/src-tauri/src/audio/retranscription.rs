@@ -61,6 +61,13 @@ impl Drop for RetranscriptionGuard {
 /// speech at every natural sentence/topic pause (500ms-2s)
 const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
+fn remote_upload_overall_progress(uploaded: u64, total: u64) -> Option<u32> {
+    if total == 0 || uploaded >= total {
+        return None;
+    }
+    Some((24 + ((uploaded as f64 / total as f64) * 20.0).round() as u32).min(44))
+}
+
 /// Progress update emitted during retranscription
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetranscriptionProgress {
@@ -68,6 +75,7 @@ pub struct RetranscriptionProgress {
     pub stage: String, // "decoding", "transcribing", "saving"
     pub progress_percentage: u32,
     pub message: String,
+    pub determinate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,8 +186,14 @@ fn normalize_single_speaker_transcripts(
         if let Some((previous, _, previous_end)) = paragraphs.last_mut() {
             let gap_ms = (*start_ms - *previous_end).max(0.0);
             if gap_ms <= 5_000.0 && previous.chars().count() + cleaned.chars().count() <= 800 {
-                let needs_space = previous.chars().last().is_some_and(|ch| ch.is_ascii_alphanumeric())
-                    && cleaned.chars().next().is_some_and(|ch| ch.is_ascii_alphanumeric());
+                let needs_space = previous
+                    .chars()
+                    .last()
+                    .is_some_and(|ch| ch.is_ascii_alphanumeric())
+                    && cleaned
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_alphanumeric());
                 if needs_space {
                     previous.push(' ');
                 }
@@ -353,8 +367,8 @@ fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     }
 
     let candidates = [
-        "audio.mp4",
         "audio.m4a",
+        "audio.mp4",
         "audio.wav",
         "audio.mp3",
         "audio.flac",
@@ -405,6 +419,8 @@ async fn run_retranscription<R: Runtime>(
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
     let use_funasr = matches!(provider.as_deref(), Some("funasr" | "qwen3asr"));
+    let use_remote_funasr = provider.as_deref() == Some("funasr-server");
+    let use_file_provider = use_funasr || use_remote_funasr;
     let meeting_mode = workflow_mode.as_deref() == Some("meeting");
     let save_global_voiceprints = meeting_mode && global_voiceprint_matching.unwrap_or(true);
 
@@ -421,7 +437,7 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    let (audio_samples, mut duration_seconds) = if use_funasr {
+    let (audio_samples, mut duration_seconds) = if use_file_provider {
         let path_for_probe = audio_path.clone();
         let duration = tokio::task::spawn_blocking(move || probe_audio_duration(&path_for_probe))
             .await
@@ -442,13 +458,13 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(
         &app,
         &meeting_id,
-        if use_funasr {
+        if use_file_provider {
             "transcribing"
         } else {
             "decoding"
         },
         20,
-        if use_funasr {
+        if use_file_provider {
             "Preparing audio for FunASR..."
         } else {
             "Audio conversion complete"
@@ -466,6 +482,7 @@ async fn run_retranscription<R: Runtime>(
     );
 
     let mut funasr_speaker_embeddings = std::collections::HashMap::new();
+    let mut voiceprint_embedding_model: Option<crate::knowledge::VoiceprintEmbeddingModel> = None;
     let funasr_transcripts = if use_funasr {
         emit_progress(
             &app,
@@ -525,11 +542,94 @@ async fn run_retranscription<R: Runtime>(
         }
         funasr_speaker_embeddings = result.speaker_embeddings.clone();
         Some(funasr_result_to_transcripts(&result, duration_seconds))
+    } else if use_remote_funasr {
+        emit_progress(
+            &app,
+            &meeting_id,
+            "uploading",
+            24,
+            "Uploading audio to the configured FunASR server...",
+        );
+        let app_state = app
+            .try_state::<AppState>()
+            .ok_or_else(|| anyhow!("App state not available"))?;
+        let config = crate::remote_funasr::load_config(app_state.db_manager.pool()).await?;
+        let progress_app = app.clone();
+        let progress_meeting_id = meeting_id.clone();
+        let remote_progress: crate::remote_funasr::RemoteProgressCallback =
+            Arc::new(move |progress| match progress {
+                crate::remote_funasr::RemoteFunAsrProgress::Upload { uploaded, total } => {
+                    if let Some(percentage) = remote_upload_overall_progress(uploaded, total) {
+                        emit_progress(
+                            &progress_app,
+                            &progress_meeting_id,
+                            "uploading",
+                            percentage,
+                            "Uploading audio to the configured FunASR server...",
+                        );
+                    } else if total > 0 && uploaded >= total {
+                        emit_indeterminate_progress(
+                            &progress_app,
+                            &progress_meeting_id,
+                            "server_submitting",
+                            "Creating the FunASR server job...",
+                        );
+                    }
+                }
+                crate::remote_funasr::RemoteFunAsrProgress::Queued => {
+                    emit_indeterminate_progress(
+                        &progress_app,
+                        &progress_meeting_id,
+                        "server_queued",
+                        "The FunASR job is queued...",
+                    );
+                }
+                crate::remote_funasr::RemoteFunAsrProgress::Processing { estimate } => {
+                    let percentage = 45 + (estimate.clamp(0.0, 1.0) * 40.0).round() as u32;
+                    emit_progress(
+                        &progress_app,
+                        &progress_meeting_id,
+                        "server_processing",
+                        percentage.min(85),
+                        "The FunASR server is recognizing speech and identifying speakers...",
+                    );
+                }
+            });
+        let cancellation_check: crate::remote_funasr::CancellationCheck =
+            Arc::new(|| RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst));
+        let result = crate::remote_funasr::transcribe_file(
+            &config.endpoint,
+            &config.token,
+            model.as_deref().unwrap_or("default"),
+            language.as_deref(),
+            meeting_mode,
+            &audio_path,
+            Some(remote_progress),
+            Some(cancellation_check),
+        )
+        .await?;
+        funasr_speaker_embeddings = result.speaker_embeddings;
+        voiceprint_embedding_model = result.speaker_embedding_model.map(|model| {
+            crate::knowledge::VoiceprintEmbeddingModel {
+                id: model.id,
+                revision: model.revision,
+                dimension: model.dimension,
+            }
+        });
+        let transcripts = result.transcripts;
+        if duration_seconds <= 0.0 {
+            duration_seconds = transcripts
+                .iter()
+                .map(|(_, _, end)| *end)
+                .fold(0.0, f64::max)
+                / 1000.0;
+        }
+        Some(transcripts)
     } else {
         None
     };
 
-    if !use_funasr {
+    if !use_file_provider {
         emit_progress(&app, &meeting_id, "vad", 20, "Detecting speech segments...");
     }
 
@@ -544,7 +644,7 @@ async fn run_retranscription<R: Runtime>(
     let app_for_vad = app.clone();
     let meeting_id_for_vad = meeting_id.clone();
 
-    let speech_segments = if use_funasr {
+    let speech_segments = if use_file_provider {
         Vec::new()
     } else {
         tokio::task::spawn_blocking(move || {
@@ -617,7 +717,7 @@ async fn run_retranscription<R: Runtime>(
         }
     }
 
-    if total_segments == 0 && !use_funasr {
+    if total_segments == 0 && !use_file_provider {
         warn!("No speech detected in audio");
         return Err(anyhow!("No speech detected in audio file"));
     }
@@ -631,7 +731,7 @@ async fn run_retranscription<R: Runtime>(
     );
 
     // Initialize the appropriate engine once (not per-segment)
-    let whisper_engine = if !use_parakeet && !use_funasr {
+    let whisper_engine = if !use_parakeet && !use_file_provider {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
@@ -757,7 +857,7 @@ async fn run_retranscription<R: Runtime>(
     // Whisper and Parakeet provide text and timestamps only. In Meeting mode,
     // run the same canonical FunASR CAM++ model used by the FunASR/Qwen path,
     // then attach meeting-local Speaker IDs to their ASR segments.
-    if meeting_mode && !use_funasr && !all_transcripts.is_empty() {
+    if meeting_mode && !use_file_provider && !all_transcripts.is_empty() {
         emit_progress(
             &app,
             &meeting_id,
@@ -823,7 +923,7 @@ async fn run_retranscription<R: Runtime>(
     }
 
     let transcribed_count = all_transcripts.len();
-    if use_funasr && transcribed_count == 0 {
+    if use_file_provider && transcribed_count == 0 {
         return Err(anyhow!(
             "FunASR returned no transcript; existing transcripts were left unchanged"
         ));
@@ -920,6 +1020,7 @@ async fn run_retranscription<R: Runtime>(
             pool,
             &meeting_id,
             &funasr_speaker_embeddings,
+            voiceprint_embedding_model.as_ref(),
         )
         .await
         {
@@ -953,7 +1054,7 @@ async fn run_retranscription<R: Runtime>(
     let audio_filename = audio_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("audio.mp4")
+        .unwrap_or("audio.m4a")
         .to_string();
 
     if managed_meeting_folder {
@@ -996,6 +1097,30 @@ fn emit_progress<R: Runtime>(
         stage: stage.to_string(),
         progress_percentage: progress,
         message: message.to_string(),
+        determinate: true,
+    };
+    store_job_status(RetranscriptionJobStatus {
+        meeting_id: meeting_id.to_string(),
+        status: "processing".to_string(),
+        progress: Some(payload.clone()),
+        result: None,
+        error: None,
+    });
+    let _ = app.emit("retranscription-progress", payload);
+}
+
+fn emit_indeterminate_progress<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &str,
+    stage: &str,
+    message: &str,
+) {
+    let payload = RetranscriptionProgress {
+        meeting_id: meeting_id.to_string(),
+        stage: stage.to_string(),
+        progress_percentage: 0,
+        message: message.to_string(),
+        determinate: false,
     };
     store_job_status(RetranscriptionJobStatus {
         meeting_id: meeting_id.to_string(),
@@ -1344,14 +1469,13 @@ pub async fn prepare_recording_speaker_diarization_command<R: Runtime>(
     use sqlx::Row;
 
     let pool = state.db_manager.pool();
-    let folder_path: Option<String> = sqlx::query_scalar(
-        "SELECT folder_path FROM meetings WHERE id = ?",
-    )
-    .bind(&meeting_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| error.to_string())?
-    .flatten();
+    let folder_path: Option<String> =
+        sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+            .bind(&meeting_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|error| error.to_string())?
+            .flatten();
     let folder_path = folder_path.ok_or_else(|| "Meeting audio is not available".to_string())?;
     let audio_path = find_audio_file(Path::new(&folder_path)).map_err(|error| error.to_string())?;
 
@@ -1439,7 +1563,9 @@ pub async fn prepare_recording_speaker_diarization_command<R: Runtime>(
         .map(|(segment, speaker)| {
             let text = segment.text.trim_start();
             let clean_text = if text.starts_with("[Speaker ") {
-                text.find(']').map(|end| text[end + 1..].trim_start()).unwrap_or(text)
+                text.find(']')
+                    .map(|end| text[end + 1..].trim_start())
+                    .unwrap_or(text)
             } else {
                 text
             };
@@ -1478,6 +1604,7 @@ pub async fn prepare_recording_speaker_diarization_command<R: Runtime>(
             pool,
             &meeting_id,
             &result.speaker_embeddings,
+            None,
         )
         .await?;
     }
@@ -1485,12 +1612,15 @@ pub async fn prepare_recording_speaker_diarization_command<R: Runtime>(
         .recluster_status(&meeting_id)
         .await
         .map_err(|error| error.to_string())?;
-    let _ = app.emit("speaker-recluster-complete", serde_json::json!({
-        "meeting_id": meeting_id,
-        "available": status.available,
-        "estimated_count": status.estimated_count,
-        "current_count": status.current_count,
-    }));
+    let _ = app.emit(
+        "speaker-recluster-complete",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "available": status.available,
+            "estimated_count": status.estimated_count,
+            "current_count": status.current_count,
+        }),
+    );
     emit_speaker_recluster_progress(&app, &meeting_id, 100, "Speaker analysis complete", false);
     Ok(status)
 }
@@ -1646,6 +1776,7 @@ pub async fn recluster_meeting_speakers_command<R: Runtime>(
             pool,
             &meeting_id,
             &result.speaker_embeddings,
+            None,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -1654,13 +1785,16 @@ pub async fn recluster_meeting_speakers_command<R: Runtime>(
         .recluster_status(&meeting_id)
         .await
         .map_err(|error| error.to_string())?;
-    app.emit("speaker-recluster-complete", serde_json::json!({
-        "meeting_id": meeting_id,
-        "available": status.available,
-        "estimated_count": status.estimated_count,
-        "current_count": status.current_count,
-    }))
-        .map_err(|error| error.to_string())?;
+    app.emit(
+        "speaker-recluster-complete",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "available": status.available,
+            "estimated_count": status.estimated_count,
+            "current_count": status.current_count,
+        }),
+    )
+    .map_err(|error| error.to_string())?;
     emit_speaker_recluster_progress(
         &app,
         &meeting_id,
@@ -1712,6 +1846,7 @@ pub async fn start_retranscription_command<R: Runtime>(
             stage: "preparing".to_string(),
             progress_percentage: 1,
             message: "Preparing transcription...".to_string(),
+            determinate: true,
         }),
         result: None,
         error: None,
@@ -1894,6 +2029,16 @@ mod tests {
     }
 
     #[test]
+    fn remote_upload_progress_uses_real_uploaded_bytes() {
+        assert_eq!(remote_upload_overall_progress(0, 1_000), Some(24));
+        assert_eq!(remote_upload_overall_progress(250, 1_000), Some(29));
+        assert_eq!(remote_upload_overall_progress(500, 1_000), Some(34));
+        assert_eq!(remote_upload_overall_progress(999, 1_000), Some(44));
+        assert_eq!(remote_upload_overall_progress(1_000, 1_000), None);
+        assert_eq!(remote_upload_overall_progress(0, 0), None);
+    }
+
+    #[test]
     fn test_find_audio_file_common_candidates() {
         let dir = tempfile::tempdir().unwrap();
 
@@ -1940,11 +2085,11 @@ mod tests {
     fn test_find_audio_file_priority_order() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Create both audio.m4a and audio.mp4 — mp4 should win (listed first in candidates)
+        // New M4A recordings should win while legacy MP4 stays compatible.
         std::fs::write(dir.path().join("audio.m4a"), b"fake").unwrap();
         std::fs::write(dir.path().join("audio.mp4"), b"fake").unwrap();
         let found = find_audio_file(dir.path()).unwrap();
-        assert_eq!(found.file_name().unwrap(), "audio.mp4");
+        assert_eq!(found.file_name().unwrap(), "audio.m4a");
     }
 
     #[test]

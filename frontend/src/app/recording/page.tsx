@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { invoke } from '@tauri-apps/api/core';
-import { motion } from 'framer-motion';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -11,25 +11,29 @@ import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { StatusOverlays } from '@/app/_components/StatusOverlays';
 import Analytics from '@/lib/analytics';
-import { SettingsModals } from '@/app/_components/SettingsModal';
 import { useModalState } from '@/hooks/useModalState';
 import { useRecordingStateSync } from '@/hooks/useRecordingStateSync';
 import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
-import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { openMeetingWorkspace } from '@/lib/meeting-window';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { LiveMeetingNotes } from '@/components/LiveMeetingNotes';
 import { hideRecordingOverlay, showRecordingOverlay } from '@/lib/recording-overlay';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CalendarDays, Check, Loader2, PictureInPicture2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+
+const SettingsModals = dynamic(() => import('@/app/_components/SettingsModal').then(module => module.SettingsModals), { ssr: false });
+const TranscriptRecovery = dynamic(() => import('@/components/TranscriptRecovery').then(module => module.TranscriptRecovery), { ssr: false });
+const LiveMeetingNotes = dynamic(() => import('@/components/LiveMeetingNotes').then(module => module.LiveMeetingNotes), {
+  ssr: false,
+  loading: () => <div className="mx-7 my-6 h-[calc(100%-3rem)] flex-1 animate-pulse rounded-2xl bg-muted/55" />,
+});
 
 type RecordingCalendarEvent = {
   id: string;
@@ -240,30 +244,26 @@ export default function RecordingPage() {
 
   // Computed values using global status
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
+  const hasOpenSettingsModal = Object.values(modals).some(Boolean);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.18, ease: 'easeOut' }}
-      className="calmee-page"
-    >
+    <div className="calmee-page">
       {/* All Modals supported*/}
-      <SettingsModals
+      {hasOpenSettingsModal && <SettingsModals
         modals={modals}
         messages={messages}
         onClose={hideModal}
-      />
+      />}
 
       {/* Recovery Dialog */}
-      <TranscriptRecovery
+      {showRecoveryDialog && <TranscriptRecovery
         isOpen={showRecoveryDialog}
         onClose={handleDialogClose}
         recoverableMeetings={recoverableMeetings}
         onRecover={handleRecovery}
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
-      />
+      />}
       <header className="calmee-titlebar flex min-h-[76px] items-center justify-between gap-6 px-7 py-2.5">
         <div className="min-w-0 flex-1">
           <input
@@ -364,6 +364,6 @@ export default function RecordingPage() {
           sidebarCollapsed={true}
         />
       </div>
-    </motion.div>
+    </div>
   );
 }

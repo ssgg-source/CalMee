@@ -30,7 +30,7 @@ impl Default for RecordingPreferences {
         Self {
             save_folder: get_default_recordings_folder(),
             auto_save: true,
-            file_format: "mp4".to_string(),
+            file_format: "m4a".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
@@ -110,6 +110,12 @@ pub async fn load_recording_preferences<R: Runtime>(
         match serde_json::from_value::<RecordingPreferences>(value.clone()) {
             Ok(mut p) => {
                 info!("Loaded recording preferences from store");
+                // MP4 was previously used for audio-only AAC. M4A is the
+                // correct user-facing container and is now the canonical
+                // format; keep this migration transparent for existing users.
+                if p.file_format.eq_ignore_ascii_case("mp4") {
+                    p.file_format = "m4a".to_string();
+                }
                 // Update macOS backend to current value if needed
                 #[cfg(target_os = "macos")]
                 {

@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatSummaryModelSizeLabelFromMb } from '@/lib/onboarding-summary-model';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 interface ModelInfo {
   name: string;
@@ -40,6 +42,7 @@ export function BuiltInModelManager({
   onModelSelect,
   layout = 'inline',
 }: BuiltInModelManagerProps) {
+  const { locale, t } = useLanguage();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hasFetched, setHasFetched] = useState<boolean>(false);
@@ -61,8 +64,8 @@ export function BuiltInModelManager({
         }
       }
     } catch (error) {
-      console.error('Failed to fetch built-in AI models:', error);
-      toast.error('Failed to load models');
+      reportTechnicalError('builtin-model-list', error);
+      toast.error(t('model.loadFailed'), { description: toUserFacingError(error, locale).message });
     } finally {
       setIsLoading(false);
       setHasFetched(true);
@@ -216,7 +219,7 @@ export function BuiltInModelManager({
       }
 
       // For real errors, show toast and remove from downloading
-      toast.error(`Failed to download ${modelName}`);
+      toast.error(t('model.downloadFailed', { model: modelName }), { description: toUserFacingError(error, locale).message });
 
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
@@ -232,25 +235,26 @@ export function BuiltInModelManager({
   const cancelDownload = async (modelName: string) => {
     try {
       await invoke('builtin_ai_cancel_download', { modelName });
-      toast.info(`Download of ${modelName} cancelled`);
+      toast.info(t('model.downloadCancelled', { model: modelName }));
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
         newSet.delete(modelName);
         return newSet;
       });
     } catch (error) {
-      console.error('Failed to cancel download:', error);
+      reportTechnicalError('builtin-model-download-cancel', error);
+      toast.error(t('model.cancelDownloadFailed'), { description: toUserFacingError(error, locale).message });
     }
   };
 
   const deleteModel = async (modelName: string) => {
     try {
       await invoke('builtin_ai_delete_model', { modelName });
-      toast.success(`Model ${modelName} deleted`);
+      toast.success(t('model.deleted', { model: modelName }));
       fetchModels();
     } catch (error) {
-      console.error('Failed to delete model:', error);
-      toast.error(`Failed to delete ${modelName}`);
+      reportTechnicalError('builtin-model-delete', error);
+      toast.error(t('model.deleteFailed', { model: modelName }), { description: toUserFacingError(error, locale).message });
     }
   };
 

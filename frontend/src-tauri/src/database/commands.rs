@@ -27,11 +27,16 @@ pub async fn select_legacy_database_path(app: AppHandle) -> Result<Option<String
 
     info!("Opening dialog to select legacy database location");
 
-    let file_path = app
-        .dialog()
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .add_filter("Database Files", &["db"])
-        .blocking_pick_file();
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let file_path = receiver
+        .await
+        .map_err(|_| "The database file picker closed unexpectedly.".to_string())?;
 
     if let Some(path) = file_path {
         let path_str = path.to_string();

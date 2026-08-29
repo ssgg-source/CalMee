@@ -66,6 +66,7 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
   const [hotwords, setHotwords] = useState<Hotword[]>([]);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
+  const [remoteAudioConsent, setRemoteAudioConsent] = useState(false);
   const [preferencesReady,setPreferencesReady]=useState(false);
   const { availableModels, selectedModelKey, setSelectedModelKey, loadingModels, fetchModels, resetSelection } = useTranscriptionModels(transcriptModelConfig);
 
@@ -80,7 +81,7 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
   const selectedProvider=(selectedModel&&compatibleModels.includes(selectedModel)?selectedModel:compatibleModels[0])?.provider;
   const providerOptions=useMemo(()=>Array.from(new Set(compatibleModels.map(item=>item.provider))),[compatibleModels]);
   const providerModels=useMemo(()=>compatibleModels.filter(item=>item.provider===selectedProvider),[compatibleModels,selectedProvider]);
-  const providerLabel=(value:ModelOption['provider'])=>value==='whisper'?'Whisper':value==='parakeet'?'Parakeet':value==='funasr'?'FunASR':'Qwen3-ASR';
+  const providerLabel=(value:ModelOption['provider'])=>value==='whisper'?'Whisper':value==='parakeet'?'Parakeet':value==='funasr'?'FunASR':value==='funasr-server'?(zh?'FunASR 服务器':'FunASR server'):'Qwen3-ASR';
   const funAsrFamily = selectedModel?.provider === 'funasr' || selectedModel?.provider === 'qwen3asr';
   const supportsHotwords = Boolean(selectedModel?.capabilities.includes('hotwords'));
   const supportsPunctuation = Boolean(selectedModel?.capabilities.includes('punctuation'));
@@ -106,6 +107,7 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
     setMergeLengthS(saved.mergeLengthS||'15');
     setSpeakerMode(saved.speakerMode||'punc_segment');
     setError('');
+    setRemoteAudioConsent(false);
     void fetchModels();
     invoke<Hotword[]>('api_list_hotwords').then(setHotwords).catch(() => setHotwords([]));
     setPreferencesReady(true);
@@ -227,7 +229,7 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
           <div className="grid gap-2"><Label>{zh?'ASR 模型':'ASR model'}</Label><Select value={selectedModelKey} onValueChange={setSelectedModelKey} disabled={loadingModels}><SelectTrigger><SelectValue placeholder={loadingModels?lt('Loading models...'):lt('Select model')}/></SelectTrigger><SelectContent>{providerModels.map(model=><SelectItem key={`${model.provider}:${model.name}`} value={`${model.provider}:${model.name}`}>{model.displayName}{model.size_mb>0?` · ${Math.round(model.size_mb)} MB`:''}</SelectItem>)}</SelectContent></Select></div>
           <div className="col-span-2 space-y-2">
           {selectedModel&&<div className="flex flex-wrap gap-1.5">{selectedModel.capabilities.map(capability=><span key={capability} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">{capability==='speaker-diarization'?(zh?'说话人分离':'Diarization'):capability==='voiceprint-matching'?(zh?'声纹匹配':'Voiceprints'):capability==='hotwords'?(zh?'热词':'Hotwords'):capability==='punctuation'?(zh?'智能标点':'Punctuation'):capability==='timestamps'?(zh?'时间戳':'Timestamps'):capability==='multilingual'?(zh?'多语言':'Multilingual'):capability.toUpperCase()}</span>)}</div>}
-          <p className="text-xs text-slate-400">{zh ? '只显示已经下载并准备好的模型。会议模式会在识别后运行独立的说话人分离管线。' : 'Only downloaded and prepared models are shown. Meeting mode runs an independent diarization pipeline after ASR.'}</p>
+          <p className="text-xs text-slate-400">{selectedModel?.provider === 'funasr-server' ? (mode === 'meeting' ? (zh ? '会议模式会请求服务器启用 CAM++ 说话人分离；服务器需使用 --spk-model cam++ 启动。' : 'Meeting mode requests server-side CAM++ diarization; start the server with --spk-model cam++.') : (zh ? '单人模式不请求说话人分离。' : 'Single mode does not request speaker diarization.')) : (zh ? '显示已准备好的本地模型和已配置的服务器模型。' : 'Shows ready local models and configured server models.')}</p>
           </div>
         </div>
 
@@ -241,6 +243,8 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
           </div>
           <label className="flex min-h-10 items-center gap-3 rounded-lg border border-slate-200 px-3"><MessageSquareText className="h-4 w-4 text-violet-500"/><span className="whitespace-nowrap text-sm text-slate-700">{zh?'知识库热词':'Hotwords'}</span><Switch checked={useHotwords} onCheckedChange={setUseHotwords} disabled={!supportsHotwords}/></label>
         </div>
+
+        {selectedModel?.provider === 'funasr-server' && <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-5 text-amber-800"><input type="checkbox" checked={remoteAudioConsent} onChange={event => setRemoteAudioConsent(event.target.checked)} className="mt-1 h-4 w-4 accent-violet-600" /><span>{zh ? '我同意将这场会议的完整录音发送到已配置的 FunASR 服务器进行转写。' : 'I agree to send this meeting\'s full recording to the configured FunASR server for transcription.'}</span></label>}
 
         <details className="group rounded-xl border border-slate-200 px-4 py-3"><summary className="cursor-pointer list-none text-sm font-medium text-slate-600">{zh ? '高级参数' : 'Advanced settings'}</summary><div className="mt-4 grid gap-4 border-t border-slate-100 pt-4">
           {supportsPunctuation&&<label className="flex items-center justify-between gap-4"><span><span className="block text-sm text-slate-700">{zh ? '智能标点' : 'Smart punctuation'}</span><span className="block text-xs text-slate-400">{zh ? '自动恢复句号、逗号和问号' : 'Restore sentence punctuation automatically'}</span></span><Switch checked={punctuation} onCheckedChange={setPunctuation} /></label>}
@@ -258,7 +262,7 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
 
       <DialogFooter className="border-t border-slate-100 px-6 py-4">
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={starting}>{lt('Cancel')}</Button>
-        <Button onClick={() => void start()} disabled={starting || loadingModels || !selectedModel || !meetingFolderPath} className="bg-violet-600 hover:bg-violet-700">{starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}{zh ? '开始转写' : 'Start transcription'}</Button>
+        <Button onClick={() => void start()} disabled={starting || loadingModels || !selectedModel || !meetingFolderPath || (selectedModel.provider === 'funasr-server' && !remoteAudioConsent)} className="bg-violet-600 hover:bg-violet-700">{starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}{zh ? '开始转写' : 'Start transcription'}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>;

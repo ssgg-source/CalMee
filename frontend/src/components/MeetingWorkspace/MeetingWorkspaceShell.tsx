@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   CalendarDays,
+  Cloud,
+  CloudOff,
   Copy,
   Check,
   FileAudio,
@@ -31,10 +33,7 @@ import {
 } from "@/components/ui/popover";
 import { AudioPlayer, AudioPlayerRef } from "./AudioPlayer";
 import { RawTranscriptView, RawTranscriptViewRef } from "./RawTranscriptView";
-import {
-  UnifiedMarkdownEditor,
-  UnifiedMarkdownEditorRef,
-} from "./UnifiedMarkdownEditor";
+import type { UnifiedMarkdownEditorRef } from "./UnifiedMarkdownEditor";
 import { ProgressIconButton } from "./ProgressIconButton";
 import { TagManager } from "./TagManager";
 import { CalendarLinkDialog } from "./CalendarLinkDialog";
@@ -47,13 +46,39 @@ import { RetranscribeDialog } from "@/components/MeetingDetails/RetranscribeDial
 import { DeepOrganizeDialog } from "@/components/MeetingDetails/DeepOrganizeDialog";
 import { TranscriptRefinementDialog } from "@/components/MeetingDetails/TranscriptRefinementDialog";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
+import { reportTechnicalError, toUserFacingError, transcriptionProgressLabel } from "@/lib/feedback";
+
+// BlockNote is the heaviest dependency in the meeting workspace. The raw
+// transcript is the default tab, so loading the editor up front makes every
+// first meeting open pay that cost even when the editor is never used.
+const UnifiedMarkdownEditor = lazy(() =>
+  import("./UnifiedMarkdownEditor").then((module) => ({
+    default: module.UnifiedMarkdownEditor,
+  })),
+);
+
+function EditorLoadingState({ zh }: { zh: boolean }) {
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+      {zh ? "正在加载编辑器…" : "Loading editor…"}
+    </div>
+  );
+}
 
 type Tab = "raw" | "smart" | "summary" | "notes" | "speech";
 type DocumentKind = "smart_record" | "meeting_summary" | "speech_summary";
 type MeetingDocument = {
   markdown: string;
   language: string;
+  templateId?: string;
+};
+type EditorSnapshot = {
+  tab: Exclude<Tab, "raw">;
+  kind?: DocumentKind;
+  contextKey?: string;
+  markdown: string;
+  language?: string;
   templateId?: string;
 };
 type GenerationPreference = {
@@ -120,6 +145,7 @@ function DocumentTabProgress({
   value: number;
   tone?: "default" | "ai";
 }) {
+  const indeterminate = value < 0;
   const progress = Math.max(1, Math.min(100, value));
   const circumference = 37.7;
   return (
@@ -127,7 +153,7 @@ function DocumentTabProgress({
       className={`relative flex h-4 w-4 shrink-0 items-center justify-center ${tone === "ai" ? "text-violet-600" : "text-slate-500"}`}
       aria-hidden="true"
     >
-      <svg className="absolute h-4 w-4 -rotate-90" viewBox="0 0 16 16">
+      <svg className={`absolute h-4 w-4 -rotate-90 ${indeterminate ? "animate-spin" : ""}`} viewBox="0 0 16 16">
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity=".14" strokeWidth="1.8" />
         <circle
           cx="8"
@@ -137,11 +163,11 @@ function DocumentTabProgress({
           stroke="currentColor"
           strokeWidth="1.8"
           strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - progress / 100)}
+          strokeDasharray={indeterminate ? "10 27.7" : circumference}
+          strokeDashoffset={indeterminate ? 0 : circumference * (1 - progress / 100)}
         />
       </svg>
-      <span className="text-[5px] font-bold leading-none tabular-nums">{Math.round(progress)}</span>
+      {!indeterminate && <span className="text-[5px] font-bold leading-none tabular-nums">{Math.round(progress)}</span>}
     </span>
   );
 }
@@ -226,6 +252,17 @@ export function MeetingWorkspaceShell({
   const [docText, setDocText] = useState("");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editorAutoSave, setEditorAutoSave] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const current = window.localStorage.getItem("calmee.meeting-editor.auto-save");
+    if (current != null) return current !== "false";
+    return window.localStorage.getItem("calmee.meeting-notes.auto-save") !== "false";
+  });
+  const editorAutoSaveRef = useRef(editorAutoSave);
+  const latestEditorSnapshotRef = useRef<EditorSnapshot | null>(null);
+  const editorDirtyRef = useRef(false);
+  const rawDirtyRef = useRef(false);
+  const editorSaveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   // This token only remounts the editor after a document is loaded/replaced.
   // It is not a persisted document version.
   const [editorReloadToken, setEditorReloadToken] = useState(0);
@@ -281,6 +318,14 @@ export function MeetingWorkspaceShell({
           .sort()
           .join("|")
       : "";
+
+  useEffect(() => {
+    editorAutoSaveRef.current = editorAutoSave;
+    window.localStorage.setItem(
+      "calmee.meeting-editor.auto-save",
+      String(editorAutoSave),
+    );
+  }, [editorAutoSave]);
 
   useEffect(() => {
     const key = `calmee.import-workflow.${meeting.id}`;
@@ -370,6 +415,15 @@ export function MeetingWorkspaceShell({
       }));
       if (preference)
         setPreferences((current) => ({ ...current, [kind]: preference }));
+      latestEditorSnapshotRef.current = {
+        tab: active as Exclude<Tab, "raw">,
+        kind,
+        contextKey: contextKey || undefined,
+        markdown,
+        language: effectiveLanguage,
+        templateId: selected?.id,
+      };
+      editorDirtyRef.current = false;
       setDocText(markdown);
       setEditorReloadToken((value) => value + 1);
       setLanguage((current) => ({ ...current, [kind]: effectiveLanguage }));
@@ -389,7 +443,10 @@ export function MeetingWorkspaceShell({
       meetingId: meeting.id,
     }).then((notes) => {
       if (!live || token !== documentLoadToken.current) return;
-      setDocText(notes?.notesMarkdown || "");
+      const markdown = notes?.notesMarkdown || "";
+      latestEditorSnapshotRef.current = { tab: "notes", markdown };
+      editorDirtyRef.current = false;
+      setDocText(markdown);
       setEditorReloadToken((value) => value + 1);
       setDirty(false);
     }).catch((error) => {
@@ -406,6 +463,14 @@ export function MeetingWorkspaceShell({
     if (active === "summary") {
       const value = summaryMarkdown(summary);
       if (value && value !== docText) {
+        latestEditorSnapshotRef.current = {
+          tab: "summary",
+          kind: "meeting_summary",
+          markdown: value,
+          language: language.meeting_summary,
+          templateId: templates.meeting_summary?.id,
+        };
+        editorDirtyRef.current = true;
         setDocText(value);
         setEditorReloadToken((token) => token + 1);
         setDirty(true);
@@ -436,6 +501,14 @@ export function MeetingWorkspaceShell({
           },
         }));
         setEditorReloadToken((token) => token + 1);
+        latestEditorSnapshotRef.current = {
+          tab: "smart",
+          kind: "smart_record",
+          markdown: value,
+          language: language.smart_record,
+          templateId: templates.smart_record?.id,
+        };
+        editorDirtyRef.current = false;
         setDirty(false);
         setOrganizeProgress(null);
         setOrganizeMessage("");
@@ -484,6 +557,15 @@ export function MeetingWorkspaceShell({
             },
           }));
           setEditorReloadToken((token) => token + 1);
+          latestEditorSnapshotRef.current = {
+            tab: "speech",
+            kind: "speech_summary",
+            contextKey: speechJobContext,
+            markdown: job.markdown,
+            language: language.speech_summary,
+            templateId: templates.speech_summary?.id,
+          };
+          editorDirtyRef.current = false;
           setDirty(false);
         }
         await invoke("api_clear_speech_summary", {
@@ -511,8 +593,8 @@ export function MeetingWorkspaceShell({
     void Promise.all([
       listen<any>("retranscription-progress", (event) => {
         if (event.payload.meeting_id === meeting.id) {
-          setTranscriptionProgress(event.payload.progress_percentage || 1);
-          setTranscriptionMessage(event.payload.message || "");
+          setTranscriptionProgress(event.payload.determinate === false ? -1 : (event.payload.progress_percentage || 1));
+          setTranscriptionMessage(transcriptionProgressLabel(event.payload.stage, locale));
         }
       }),
       listen<any>("retranscription-complete", async (event) => {
@@ -581,21 +663,21 @@ export function MeetingWorkspaceShell({
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [meeting.id, onRefetchTranscripts, zh, importWorkflow]);
+  }, [meeting.id, onRefetchTranscripts, zh, locale, importWorkflow]);
   useEffect(() => {
     let live = true;
     invoke<any>("get_retranscription_status_command", { meetingId: meeting.id })
       .then((job) => {
         if (live && job.status === "processing") {
-          setTranscriptionProgress(job.progress?.progress_percentage || 1);
-          setTranscriptionMessage(job.progress?.message || "");
+          setTranscriptionProgress(job.progress?.determinate === false ? -1 : (job.progress?.progress_percentage || 1));
+          setTranscriptionMessage(transcriptionProgressLabel(job.progress?.stage, locale));
         }
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [meeting.id]);
+  }, [meeting.id, locale]);
   useEffect(() => {
     let live = true;
     invoke<any>("api_get_transcript_refinement_status", {
@@ -679,6 +761,76 @@ export function MeetingWorkspaceShell({
       if (timer) window.clearTimeout(timer);
     };
   }, [refinementProgress, meeting.id, zh, importWorkflow]);
+  const persistEditorSnapshot = useCallback((snapshot: EditorSnapshot) => {
+    const operation = editorSaveQueueRef.current.then(async () => {
+      setSaving(true);
+      try {
+        if (snapshot.tab === "notes") {
+          await invoke("api_save_meeting_notes", {
+            meetingId: meeting.id,
+            notesMarkdown: snapshot.markdown,
+            notesJson: JSON.stringify({ source: "meeting-workspace" }),
+          });
+        } else if (snapshot.kind) {
+          await invoke("api_save_meeting_document", {
+            meetingId: meeting.id,
+            kind: snapshot.kind,
+            contextKey: snapshot.contextKey || null,
+            markdown: snapshot.markdown,
+            language: snapshot.language || "auto",
+            templateId: snapshot.templateId || null,
+          });
+          if (snapshot.kind === "meeting_summary") {
+            await invoke("api_save_meeting_summary", {
+              meetingId: meeting.id,
+              summary: { markdown: snapshot.markdown },
+            });
+          }
+          setDocs((current) => ({
+            ...current,
+            [snapshot.kind!]: {
+              markdown: snapshot.markdown,
+              language: snapshot.language || "auto",
+              templateId: snapshot.templateId,
+            },
+          }));
+        }
+        const latest = latestEditorSnapshotRef.current;
+        if (
+          latest?.tab === snapshot.tab &&
+          latest.markdown === snapshot.markdown &&
+          latest.contextKey === snapshot.contextKey
+        ) {
+          editorDirtyRef.current = false;
+          setDirty(false);
+        }
+        return true;
+      } catch (error) {
+        reportTechnicalError("meeting-notes-save", error);
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    });
+    editorSaveQueueRef.current = operation;
+    return operation;
+  }, [meeting.id]);
+
+  const captureEditorSnapshot = async (): Promise<EditorSnapshot | null> => {
+    if (active === "raw") return null;
+    const markdown = (await editorRef.current?.getMarkdown()) ?? docText;
+    const snapshot: EditorSnapshot = {
+      tab: active,
+      kind,
+      contextKey: contextKey || undefined,
+      markdown,
+      language: kind ? language[kind] : undefined,
+      templateId: kind ? templates[kind]?.id : undefined,
+    };
+    latestEditorSnapshotRef.current = snapshot;
+    return snapshot;
+  };
+
   const saveCurrent = async (notify = true) => {
     setSaving(true);
     try {
@@ -686,43 +838,18 @@ export function MeetingWorkspaceShell({
         await rawRef.current?.save();
         return true;
       }
-      if (active === "notes") {
-        const markdown = (await editorRef.current?.getMarkdown()) ?? docText;
-        await invoke("api_save_meeting_notes", {
-          meetingId: meeting.id,
-          notesMarkdown: markdown,
-          notesJson: JSON.stringify({ source: "meeting-workspace" }),
-        });
-        setDocText(markdown);
-        setDirty(false);
-        if (notify) toast.success(zh ? "会中笔记已保存" : "Meeting notes saved");
-        return true;
+      const snapshot = await captureEditorSnapshot();
+      if (!snapshot) return true;
+      const saved = await persistEditorSnapshot(snapshot);
+      if (!saved) throw new Error("Meeting document could not be saved");
+      setDocText(snapshot.markdown);
+      if (notify) {
+        toast.success(
+          active === "notes"
+            ? zh ? "会中笔记已保存" : "Meeting notes saved"
+            : zh ? "已保存" : "Saved",
+        );
       }
-      if (!kind) return true;
-      const markdown = (await editorRef.current?.getMarkdown()) ?? docText;
-      await invoke("api_save_meeting_document", {
-        meetingId: meeting.id,
-        kind,
-        contextKey: contextKey || null,
-        markdown,
-        language: language[kind],
-        templateId: templates[kind]?.id || null,
-      });
-      if (kind === "meeting_summary")
-        await invoke("api_save_meeting_summary", {
-          meetingId: meeting.id,
-          summary: { markdown },
-        });
-      setDocs((current) => ({
-        ...current,
-        [kind]: {
-          markdown,
-          language: language[kind],
-          templateId: templates[kind]?.id,
-        },
-      }));
-      setDirty(false);
-      if (notify) toast.success(zh ? "已保存" : "Saved");
       return true;
     } catch (error) {
       if (notify) {
@@ -735,6 +862,63 @@ export function MeetingWorkspaceShell({
     } finally {
       setSaving(false);
     }
+  };
+  useEffect(() => {
+    if (active === "raw" || !editorAutoSave || !dirty) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const snapshot = await captureEditorSnapshot();
+        if (!snapshot) return;
+        const saved = await persistEditorSnapshot(snapshot);
+        if (!saved) {
+          toast.error(zh ? "自动保存失败" : "Could not auto-save", {
+            description: zh ? "内容仍保留在当前页面，请重试。" : "Your changes remain on this page. Please try again.",
+          });
+        }
+      })();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [active, dirty, docText, editorAutoSave, persistEditorSnapshot, zh]);
+
+  // Route or meeting-tab navigation can unmount this workspace without using
+  // its internal tab buttons. Queue one last snapshot so a just-typed note is
+  // not lost during that transition.
+  useEffect(() => () => {
+    const snapshot = latestEditorSnapshotRef.current;
+    if (editorAutoSaveRef.current && editorDirtyRef.current && snapshot) {
+      void persistEditorSnapshot(snapshot);
+    }
+    if (editorAutoSaveRef.current && rawDirtyRef.current) {
+      void rawRef.current?.save(false);
+    }
+  }, [persistEditorSnapshot]);
+
+  const changeWorkspaceTab = async (next: Tab) => {
+    if (next === active) return;
+    if (active === "raw" && editorAutoSave && rawDirtyRef.current) {
+      try {
+        await rawRef.current?.save(false);
+        rawDirtyRef.current = false;
+        setDirty(false);
+      } catch (error) {
+        reportTechnicalError("transcript-auto-save", error);
+        toast.error(zh ? "请先保存当前文字稿" : "Save the transcript before leaving", {
+          description: zh ? "自动保存失败，已留在当前页面。" : "Auto-save failed, so this page remains open.",
+        });
+        return;
+      }
+    }
+    if (active !== "raw" && editorAutoSave && editorDirtyRef.current) {
+      const snapshot = await captureEditorSnapshot();
+      const saved = snapshot ? await persistEditorSnapshot(snapshot) : true;
+      if (!saved) {
+        toast.error(zh ? "请先保存当前内容" : "Save the current document before leaving", {
+          description: zh ? "自动保存失败，已留在当前页面。" : "Auto-save failed, so this page remains open.",
+        });
+        return;
+      }
+    }
+    setActive(next);
   };
   useEffect(() => {
     const handleBatchCorrection = (event: Event) => {
@@ -796,6 +980,7 @@ export function MeetingWorkspaceShell({
               ?? current.split(detail.from).join(detail.to),
             );
           }
+          editorDirtyRef.current = false;
           setDirty(false);
           await Promise.all([
             rawRef.current?.reloadAi(),
@@ -866,6 +1051,9 @@ export function MeetingWorkspaceShell({
     if (!kind) return;
     setTemplates((current) => ({ ...current, [kind]: template }));
     persistPreference(kind, { templateId: template.id });
+    const current = latestEditorSnapshotRef.current;
+    if (current) latestEditorSnapshotRef.current = { ...current, templateId: template.id };
+    editorDirtyRef.current = true;
     setDirty(true);
   };
   const summaryRunning = ["processing", "summarizing", "regenerating"].includes(
@@ -1072,17 +1260,7 @@ export function MeetingWorkspaceShell({
                       disabled={transcripts.length === 0}
                     />
                   </>
-                ) : active === "notes" ? (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 border-violet-100 bg-violet-50/60 text-violet-600"
-                    title={zh ? "会中笔记" : "Meeting notes"}
-                    disabled
-                  >
-                    <NotebookPen className="h-4 w-4" />
-                  </Button>
-                ) : (
+                ) : active === "notes" ? null : (
                   <>
                     <Popover>
                       <PopoverTrigger asChild>
@@ -1238,6 +1416,24 @@ export function MeetingWorkspaceShell({
             <div className="flex items-center justify-self-end gap-2">
               <ButtonGroup>
                 <Button
+                    variant="outline"
+                    size="icon"
+                    className={`h-9 w-9 ${editorAutoSave ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-slate-500"}`}
+                    title={
+                      editorAutoSave
+                        ? saving
+                          ? zh ? "正在自动保存" : "Auto-saving"
+                          : dirty
+                            ? zh ? "等待自动保存" : "Waiting to auto-save"
+                            : zh ? "自动保存已开启" : "Auto-save is on"
+                        : zh ? "自动保存已关闭" : "Auto-save is off"
+                    }
+                    aria-pressed={editorAutoSave}
+                    onClick={() => setEditorAutoSave((value) => !value)}
+                  >
+                    {editorAutoSave ? <Cloud className="h-4 w-4" /> : <CloudOff className="h-4 w-4" />}
+                  </Button>
+                <Button
                   variant="outline"
                   size="icon"
                   className={`h-9 w-9 ${dirty ? "border-emerald-200 bg-emerald-50 text-emerald-700" : ""}`}
@@ -1292,7 +1488,7 @@ export function MeetingWorkspaceShell({
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActive(tab.id)}
+                    onClick={() => void changeWorkspaceTab(tab.id)}
                     title={backgroundProgress != null ? progressTitle : undefined}
                     className={`flex items-center justify-center gap-2 border-b-2 px-3 py-2.5 text-[13px] leading-5 transition ${active === tab.id ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                   >
@@ -1320,33 +1516,61 @@ export function MeetingWorkspaceShell({
                 onRefetch={onRefetchTranscripts}
                 onSeek={(seconds) => audioRef.current?.seekTo(seconds)}
                 currentTime={audioTime}
+                autoSave={editorAutoSave}
+                onDirtyChange={(value) => {
+                  rawDirtyRef.current = value;
+                  setDirty(value);
+                }}
               />
             ) : active === "notes" ? (
-              <UnifiedMarkdownEditor
-                key={`meeting-notes:${editorReloadToken}`}
-                ref={editorRef}
-                documentKey={`${meeting.id}:meeting-notes:${editorReloadToken}`}
-                value={docText}
-                placeholder={zh ? "整理会中记录、重点、决定和待办…" : "Organize meeting notes, highlights, decisions, and actions…"}
-                onChange={setDocText}
-                onDirtyChange={setDirty}
-              />
+              <Suspense fallback={<EditorLoadingState zh={zh} />}>
+                <UnifiedMarkdownEditor
+                  key={`meeting-notes:${editorReloadToken}`}
+                  ref={editorRef}
+                  documentKey={`${meeting.id}:meeting-notes:${editorReloadToken}`}
+                  value={docText}
+                  placeholder={zh ? "整理会中记录、重点、决定和待办…" : "Organize meeting notes, highlights, decisions, and actions…"}
+                  onChange={(markdown) => {
+                    latestEditorSnapshotRef.current = { tab: "notes", markdown };
+                    setDocText(markdown);
+                  }}
+                  onDirtyChange={(value) => {
+                    editorDirtyRef.current = value;
+                    setDirty(value);
+                  }}
+                />
+              </Suspense>
             ) : kind ? (
-              <UnifiedMarkdownEditor
-                key={`${kind}:${contextKey}:${editorReloadToken}`}
-                ref={editorRef}
-                documentKey={`${meeting.id}:${kind}:${contextKey}:${editorReloadToken}`}
-                value={docText}
-                placeholder={
-                  active === "smart"
-                    ? "在这里生成或编辑详细的智能记录…"
-                    : active === "summary"
-                      ? "在这里生成或编辑会议纪要…"
-                      : "选择讲话人后生成讲话总结…"
-                }
-                onChange={setDocText}
-                onDirtyChange={setDirty}
-              />
+              <Suspense fallback={<EditorLoadingState zh={zh} />}>
+                <UnifiedMarkdownEditor
+                  key={`${kind}:${contextKey}:${editorReloadToken}`}
+                  ref={editorRef}
+                  documentKey={`${meeting.id}:${kind}:${contextKey}:${editorReloadToken}`}
+                  value={docText}
+                  placeholder={
+                    active === "smart"
+                      ? "在这里生成或编辑详细的智能记录…"
+                      : active === "summary"
+                        ? "在这里生成或编辑会议纪要…"
+                        : "选择讲话人后生成讲话总结…"
+                  }
+                  onChange={(markdown) => {
+                    latestEditorSnapshotRef.current = {
+                      tab: active as Exclude<Tab, "raw">,
+                      kind,
+                      contextKey: contextKey || undefined,
+                      markdown,
+                      language: language[kind],
+                      templateId: templates[kind]?.id,
+                    };
+                    setDocText(markdown);
+                  }}
+                  onDirtyChange={(value) => {
+                    editorDirtyRef.current = value;
+                    setDirty(value);
+                  }}
+                />
+              </Suspense>
             ) : null}
           </div>
         </div>

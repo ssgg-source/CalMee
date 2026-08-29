@@ -268,7 +268,7 @@ impl RecordingSaver {
                 system_audio: None,
             },
             audio_file: if create_checkpoints {
-                "audio.mp4".to_string()
+                "audio.m4a".to_string()
             } else {
                 "".to_string()
             },
@@ -410,7 +410,7 @@ impl RecordingSaver {
             return Ok(None);
         }
 
-        // Finalize incremental saver (merge checkpoints into final audio.mp4)
+        // Finalize incremental saver into a seekable M4A while preserving segments.
         let final_audio_path = if let Some(saver_arc) = &self.incremental_saver {
             let finalize_result = {
                 let mut saver = saver_arc.lock().await;
