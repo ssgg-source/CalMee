@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain } from 'lucide-react';
+import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon, CalendarDays, HardDriveDownload, Brain, BookText, Info, UsersRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -26,6 +26,8 @@ const SummaryModelSettings = dynamic(() => import('@/components/SummaryModelSett
 const CalendarSettings = dynamic(() => import('@/components/CalendarSettings').then(module => module.CalendarSettings), { loading: SettingsPaneLoading });
 const DedaoSettings = dynamic(() => import('@/components/DedaoSettings').then(module => module.DedaoSettings), { loading: SettingsPaneLoading });
 const DataMigrationSettings = dynamic(() => import('@/components/DataMigrationSettings').then(module => module.DataMigrationSettings), { loading: SettingsPaneLoading });
+const KnowledgeSettings = dynamic(() => import('@/components/KnowledgeSettings').then(module => module.KnowledgeSettings), { loading: SettingsPaneLoading });
+const About = dynamic(() => import('@/components/About').then(module => module.About), { loading: SettingsPaneLoading });
 
 // Tabs configuration (constant)
 const TABS = [
@@ -35,7 +37,10 @@ const TABS = [
   { value: 'summaryModels', labelKey: 'settings.summary', icon: SparkleIcon },
   { value: 'calendar', labelKey: 'settings.calendar', icon: CalendarDays },
   { value: 'dedao', labelKey: 'settings.dedao', icon: Brain },
-  { value: 'dataMigration', labelKey: 'settings.dataMigration', icon: HardDriveDownload }
+  { value: 'people', labelKey: 'settings.people', icon: UsersRound },
+  { value: 'hotwords', labelKey: 'settings.hotwords', icon: BookText },
+  { value: 'dataMigration', labelKey: 'settings.dataMigration', icon: HardDriveDownload },
+  { value: 'about', labelKey: 'settings.about', icon: Info },
 ] as const;
 
 export default function SettingsPage() {
@@ -94,7 +99,10 @@ export default function SettingsPage() {
             </TabsContent>
             <TabsContent value="calendar" className="m-0"><CalendarSettings /></TabsContent>
             <TabsContent value="dedao" className="m-0"><DedaoSettings /></TabsContent>
+            <TabsContent value="people" className="m-0"><KnowledgeSettings section="people" showSectionSwitcher={false} /></TabsContent>
+            <TabsContent value="hotwords" className="m-0"><KnowledgeSettings section="terms" showSectionSwitcher={false} /></TabsContent>
             <TabsContent value="dataMigration" className="m-0"><DataMigrationSettings /></TabsContent>
+            <TabsContent value="about" className="m-0"><About /></TabsContent>
           </div>
         </Tabs>
       </ProductPageContent>

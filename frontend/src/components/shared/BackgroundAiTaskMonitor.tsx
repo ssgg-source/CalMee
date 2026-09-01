@@ -247,13 +247,13 @@ export function BackgroundAiTaskMonitor() {
         if (visibleProgressRef.current.get(id) === signature) return;
         visibleProgressRef.current.set(id, signature);
         toast.loading(title, { id, description, duration: Infinity,
-          action: { label: zh ? '打开数据' : 'Open Data', onClick: () => router.push('/knowledge') } });
+          action: { label: zh ? '打开人员' : 'Open People', onClick: () => router.push('/settings?tab=people') } });
       }),
       addListener<ProfileEvent>('person-profile-ai-complete', payload => {
         visibleProgressRef.current.delete(profileToastId(payload.personId));
         toast.dismiss(profileToastId(payload.personId));
         toast.success(zh ? `${payload.personName} 的人物画像已生成` : `${payload.personName}'s profile is ready`, {
-          duration: 10000, action: { label: zh ? '打开数据' : 'Open Data', onClick: () => router.push('/knowledge') },
+          duration: 10000, action: { label: zh ? '打开人员' : 'Open People', onClick: () => router.push('/settings?tab=people') },
         });
       }),
       addListener<ProfileEvent>('person-profile-ai-error', payload => {

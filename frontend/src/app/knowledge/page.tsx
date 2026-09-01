@@ -1,33 +1,24 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { ProductPage, ProductPageContent, ProductPageHeader } from "@/components/layout/ProductPage";
 
-const KnowledgeSettings = dynamic(() => import("@/components/KnowledgeSettings").then(module => module.KnowledgeSettings), {
-  ssr: false,
-  loading: () => (
-    <div className="space-y-3">
-      <div className="h-9 w-56 animate-pulse rounded-lg bg-muted" />
-      <div className="h-[430px] animate-pulse rounded-xl bg-muted/55" />
-    </div>
-  ),
-});
-
-export default function KnowledgePage() {
+export default function LegacyKnowledgePage() {
+  const router = useRouter();
   const { locale } = useLanguage();
-  const zh = locale === "zh-CN";
+
+  useEffect(() => {
+    router.replace("/settings?tab=people");
+  }, [router]);
+
   return (
-    <ProductPage>
-      <ProductPageHeader
-        title={zh ? "数据" : "Data"}
-        description={zh ? "管理人员、声纹和转写词库" : "Manage people, voiceprints, and transcription vocabulary"}
-      />
-      <ProductPageContent className="px-7 pb-12 pt-5">
-        <div className="mx-auto max-w-[1180px]">
-          <KnowledgeSettings />
-        </div>
-      </ProductPageContent>
-    </ProductPage>
+    <div className="grid h-full place-items-center text-[12px] text-muted-foreground">
+      <span className="flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        {locale === "zh-CN" ? "正在打开人员设置…" : "Opening People settings…"}
+      </span>
+    </div>
   );
 }

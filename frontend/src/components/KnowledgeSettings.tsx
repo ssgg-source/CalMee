@@ -18,6 +18,11 @@ type Section = "people" | "terms";
 type PendingConfirm = { kind: "people" | "terms" | "legacy"; ids?: string[]; count: number };
 type KnowledgeSnapshot = { people: Person[]; hotwords: Hotword[]; legacy: LegacyPreview };
 
+type KnowledgeSettingsProps = {
+  section?: Section;
+  showSectionSwitcher?: boolean;
+};
+
 let knowledgeSnapshot: KnowledgeSnapshot | null = null;
 let knowledgeRequest: Promise<KnowledgeSnapshot> | null = null;
 
@@ -37,10 +42,10 @@ const fetchKnowledgeSnapshot = () => {
   return knowledgeRequest;
 };
 
-export function KnowledgeSettings() {
+export function KnowledgeSettings({ section: requestedSection, showSectionSwitcher = true }: KnowledgeSettingsProps = {}) {
   const { locale } = useLanguage();
   const zh = locale === "zh-CN";
-  const [section, setSection] = useState<Section>("people");
+  const [section, setSection] = useState<Section>(requestedSection ?? "people");
   const [people, setPeople] = useState<Person[]>([]);
   const [hotwords, setHotwords] = useState<Hotword[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,6 +96,13 @@ export function KnowledgeSettings() {
     const saved = localStorage.getItem("calmeePeopleView");
     if (saved === "list" || saved === "cards") setPersonView(saved);
   }, []);
+
+  useEffect(() => {
+    if (requestedSection) {
+      setSection(requestedSection);
+      setQuery("");
+    }
+  }, [requestedSection]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visiblePeople = useMemo(() => people.filter((item) => !normalizedQuery || item.name.toLowerCase().includes(normalizedQuery)), [people, normalizedQuery]);
@@ -215,16 +227,28 @@ export function KnowledgeSettings() {
 
   return (
     <section>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <ProductSegmentedControl
-          value={section}
-          onChange={(value) => { setSection(value); setQuery(""); }}
-          ariaLabel={zh ? "数据类型" : "Data type"}
-          options={[
-            { value: "people", label: zh ? "人员与声纹" : "People" },
-            { value: "terms", label: zh ? "转写词库" : "Vocabulary" },
-          ]}
-        />
+      {!showSectionSwitcher && (
+        <div className="mb-5">
+          <h2 className="text-[15px] font-semibold text-foreground">{section === "people" ? (zh ? "人员" : "People") : (zh ? "词库" : "Hotwords")}</h2>
+          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+            {section === "people"
+              ? (zh ? "管理参会人员、别名和声纹资料。" : "Manage participants, aliases, and voiceprint data.")
+              : (zh ? "管理转写热词和专有名词，提升语音转写的准确性。" : "Manage transcription hotwords and proper nouns to improve transcription accuracy.")}
+          </p>
+        </div>
+      )}
+      <div className={`mb-3 flex items-center gap-3 ${showSectionSwitcher ? "justify-between" : "justify-end"}`}>
+        {showSectionSwitcher && (
+          <ProductSegmentedControl
+            value={section}
+            onChange={(value) => { setSection(value); setQuery(""); }}
+            ariaLabel={zh ? "数据类型" : "Data type"}
+            options={[
+              { value: "people", label: zh ? "人员" : "People" },
+              { value: "terms", label: zh ? "词库" : "Hotwords" },
+            ]}
+          />
+        )}
         <div className="flex items-center gap-2">
           {section === "people" && (
             <div className="flex h-9 items-center rounded-lg border border-border/80 bg-muted/45 p-0.5">
@@ -305,7 +329,7 @@ export function KnowledgeSettings() {
             </div>
             {bulkOpen && <div className="flex gap-3 border-b border-border/70 bg-muted/25 p-4"><textarea value={bulk} onChange={(event) => setBulk(event.target.value)} className="min-h-24 min-w-0 flex-1 resize-y rounded-lg border border-input bg-card p-3 text-[12px] leading-5 outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/15" placeholder={zh ? "每行一个词；也支持“词 频次”" : "One term per line; “term frequency” is supported"} /><ProductButton size="sm" variant="primary" className="self-end" onClick={() => void importBulk()} disabled={!bulk.trim()}>{zh ? "导入" : "Import"}</ProductButton></div>}
             {!visibleTerms.length ? (
-              <ProductEmptyState icon={<BookText className="h-5 w-5" />} title={hotwords.length ? (zh ? "没有匹配的词" : "No matching terms") : (zh ? "词库还是空的" : "Vocabulary is empty")} description={hotwords.length ? (zh ? "调整搜索内容或标签筛选。" : "Adjust the search or tag filter.") : (zh ? "添加产品名、人名和专业术语，可以减少转写中的专有名词错误。" : "Add product names, people, and specialist terms to improve transcription accuracy.")} action={hotwords.length ? <ProductButton size="sm" onClick={() => setQuery("")}>{zh ? "清除搜索" : "Clear search"}</ProductButton> : undefined} />
+              <ProductEmptyState icon={<BookText className="h-5 w-5" />} title={hotwords.length ? (zh ? "没有匹配的词" : "No matching terms") : (zh ? "词库还是空的" : "Hotword library is empty")} description={hotwords.length ? (zh ? "调整搜索内容或标签筛选。" : "Adjust the search or tag filter.") : (zh ? "添加产品名、人名和专业术语，提升语音转写的准确性。" : "Add product names, people, and specialist terms to improve transcription accuracy.")} action={hotwords.length ? <ProductButton size="sm" onClick={() => setQuery("")}>{zh ? "清除搜索" : "Clear search"}</ProductButton> : undefined} />
             ) : (
               <TermsList zh={zh} terms={visibleTerms} selected={selectedTerms} tagLabel={tagLabel} onTag={setTagFilter} onToggle={(id) => toggle(setSelectedTerms, id)} onToggleAll={() => setSelectedTerms(visibleTerms.every((item) => selectedTerms.has(item.id)) ? new Set() : new Set(visibleTerms.map((item) => item.id)))} onEnabled={setEnabled} onRemove={removeTerms} />
             )}
