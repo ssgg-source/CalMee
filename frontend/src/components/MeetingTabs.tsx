@@ -4,7 +4,7 @@ import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'rea
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { CalendarDays, Database, FileText, Info, LayoutDashboard, Mic2, Settings, Upload, X } from 'lucide-react';
+import { CalendarDays, FileText, LayoutDashboard, Mic2, Settings, Upload, X } from 'lucide-react';
 import { meetingUrl, readMeetingTabs, removeMeetingTab, subscribeMeetingTabs } from '@/lib/meeting-window';
 import { useLanguage } from '@/contexts/LanguageContext';
 
@@ -12,9 +12,9 @@ const baseMeta=(route:string)=>{
   if(route.startsWith('/recording'))return {labelKey:'nav.recording' as const,icon:Mic2};
   if(route.startsWith('/upload'))return {labelKey:'nav.upload' as const,icon:Upload};
   if(route.startsWith('/calendar'))return {labelKey:'nav.calendar' as const,icon:CalendarDays};
-  if(route.startsWith('/knowledge'))return {labelKey:'nav.knowledge' as const,icon:Database};
+  if(route.startsWith('/knowledge'))return {labelKey:'nav.settings' as const,icon:Settings};
   if(route.startsWith('/settings'))return {labelKey:'nav.settings' as const,icon:Settings};
-  if(route.startsWith('/about'))return {labelKey:'nav.about' as const,icon:Info};
+  if(route.startsWith('/about'))return {labelKey:'nav.settings' as const,icon:Settings};
   return {labelKey:'nav.home' as const,icon:LayoutDashboard};
 };
 

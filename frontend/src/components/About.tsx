@@ -17,7 +17,7 @@ export function About() {
         <div className="space-y-5">
             <ProductPanel className="p-7 text-center">
                 <Image
-                    src="icon_128x128.png"
+                    src="/icon_128x128.png"
                     alt={t('about.iconAlt')}
                     width={64}
                     height={64}

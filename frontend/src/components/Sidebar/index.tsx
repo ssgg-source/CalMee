@@ -7,9 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import {
   CalendarDays,
-  Info,
   LayoutDashboard,
-  Database,
   Mic2,
   Settings,
   Upload,
@@ -25,15 +23,13 @@ const mainItems = [
   { href: '/recording', labelKey: 'nav.recording', icon: Mic2 },
   { href: '/upload', labelKey: 'nav.upload', icon: Upload },
   { href: '/calendar', labelKey: 'nav.calendar', icon: CalendarDays },
-  { href: '/knowledge', labelKey: 'nav.knowledge', icon: Database },
 ] as const;
 
 const footerItems = [
   { href: '/settings', labelKey: 'nav.settings', icon: Settings },
-  { href: '/about', labelKey: 'nav.about', icon: Info },
 ] as const;
 
-const warmRoutes = ['/recording', '/calendar', '/upload', '/knowledge', '/settings', '/about'] as const;
+const warmRoutes = ['/recording', '/calendar', '/upload', '/settings'] as const;
 
 export default function Sidebar() {
   const pathname = usePathname();
