@@ -36,9 +36,9 @@ const TABS = [
   { value: 'Transcriptionmodels', labelKey: 'settings.transcription', icon: DatabaseIcon },
   { value: 'summaryModels', labelKey: 'settings.summary', icon: SparkleIcon },
   { value: 'calendar', labelKey: 'settings.calendar', icon: CalendarDays },
-  { value: 'dedao', labelKey: 'settings.dedao', icon: Brain },
   { value: 'people', labelKey: 'settings.people', icon: UsersRound },
   { value: 'hotwords', labelKey: 'settings.hotwords', icon: BookText },
+  { value: 'dedao', labelKey: 'settings.dedao', icon: Brain },
   { value: 'dataMigration', labelKey: 'settings.dataMigration', icon: HardDriveDownload },
   { value: 'about', labelKey: 'settings.about', icon: Info },
 ] as const;

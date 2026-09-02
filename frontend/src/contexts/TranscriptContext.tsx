@@ -7,7 +7,7 @@ import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
-import { isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@/lib/data-invoke';
 
 interface TranscriptContextType {
   transcripts: Transcript[];

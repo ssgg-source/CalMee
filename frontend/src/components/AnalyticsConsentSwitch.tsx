@@ -1,236 +1,54 @@
-import React, { useContext, useState, useEffect } from 'react';
-import { Switch } from '@/components/ui/switch';
-import { Button } from '@/components/ui/button';
-import { Info, Loader2, Copy, Check } from 'lucide-react';
-import { AnalyticsContext } from './AnalyticsProvider';
-import { load } from '@tauri-apps/plugin-store';
-import { invoke } from '@tauri-apps/api/core';
-import { Analytics } from '@/lib/analytics';
-import AnalyticsDataModal from './AnalyticsDataModal';
+import React, { useEffect, useState } from 'react';
+import { invoke } from '@/lib/data-invoke';
+import { BarChart3, Clock3, FileText, Loader2, Mic2, NotebookPen } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { Switch } from '@/components/ui/switch';
 
-const ANALYTICS_DEFAULT_OFF_MIGRATION_KEY = 'analyticsDefaultOffMigrationV1';
+const LOCAL_USAGE_VISIBLE_KEY = 'calmee.local-usage.visible';
+type Period = '7d' | '30d' | 'all';
+type UsageStats = { meetings:number; recordings:number; transcriptCharacters:number; noteCharacters:number; transcribedSeconds:number };
 
 export default function AnalyticsConsentSwitch() {
-  const { lt } = useLanguage();
-  const { setIsAnalyticsOptedIn, isAnalyticsOptedIn } = useContext(AnalyticsContext);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-  const [userId, setUserId] = useState<string>('');
-  const [isCopied, setIsCopied] = useState(false);
-
-  // Note: Store loading is handled by AnalyticsProvider to avoid race conditions
+  const { lt, locale } = useLanguage();
+  const zh = locale === 'zh-CN';
+  const [visible, setVisible] = useState(() => typeof window !== 'undefined' && window.localStorage.getItem(LOCAL_USAGE_VISIBLE_KEY) === 'true');
+  const [period, setPeriod] = useState<Period>('30d');
+  const [stats, setStats] = useState<UsageStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   useEffect(() => {
-    const loadUserId = async () => {
-      if (isAnalyticsOptedIn) {
-        try {
-          const id = await Analytics.getPersistentUserId();
-          setUserId(id);
-        } catch (error) {
-          console.error('Failed to load user ID:', error);
-        }
-      } else {
-        setUserId('');
-      }
-    };
-    loadUserId();
-  }, [isAnalyticsOptedIn]);
+    window.localStorage.setItem(LOCAL_USAGE_VISIBLE_KEY, String(visible));
+    if (!visible) { setStats(null); return; }
+    const since = period === 'all' ? null : new Date(Date.now() - (period === '7d' ? 7 : 30) * 86400000).toISOString();
+    setStatsLoading(true);
+    void invoke<UsageStats>('api_get_local_usage_stats', { since })
+      .then(setStats)
+      .catch(() => setStats(null))
+      .finally(() => setStatsLoading(false));
+  }, [visible, period]);
 
-  const handleCopyUserId = async () => {
-    if (!userId) return;
+  const metrics = stats ? [
+    [FileText, lt('Meetings'), stats.meetings.toLocaleString()],
+    [Mic2, lt('Recordings'), stats.recordings.toLocaleString()],
+    [Clock3, lt('Transcribed audio'), `${Math.round(stats.transcribedSeconds / 60).toLocaleString()} ${zh ? '分钟' : 'min'}`],
+    [BarChart3, lt('Transcript characters'), stats.transcriptCharacters.toLocaleString()],
+    [NotebookPen, lt('Note characters'), stats.noteCharacters.toLocaleString()],
+  ] as const : [];
 
-    try {
-      await navigator.clipboard.writeText(userId);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-
-      // Track that user copied their ID
-      await Analytics.track('user_id_copied', {
-        user_id: userId
-      });
-    } catch (error) {
-      console.error('Failed to copy user ID:', error);
-    }
-  };
-
-  const handleToggle = async (enabled: boolean) => {
-    // If user is trying to DISABLE, show the modal first
-    if (!enabled) {
-      setShowModal(true);
-      // Track that user viewed the transparency modal
-      try {
-        await invoke('track_analytics_transparency_viewed');
-      } catch (error) {
-        console.error('Failed to track transparency view:', error);
-      }
-      return; // Don't disable yet, wait for modal confirmation
-    }
-
-    // If ENABLING, proceed immediately
-    await performToggle(enabled);
-  };
-
-  const performToggle = async (enabled: boolean) => {
-    // Optimistic update - immediately update UI state
-    setIsAnalyticsOptedIn(enabled);
-    setIsProcessing(true);
-
-    try {
-      const store = await load('analytics.json', {
-        autoSave: false,
-        defaults: {
-          analyticsOptedIn: false
-        }
-      });
-      await store.set('analyticsOptedIn', enabled);
-      await store.set(ANALYTICS_DEFAULT_OFF_MIGRATION_KEY, true);
-      await store.save();
-
-      if (enabled) {
-        // Full analytics initialization (same as AnalyticsProvider)
-        const userId = await Analytics.getPersistentUserId();
-
-        // Initialize analytics
-        await Analytics.init();
-
-        // Identify user with enhanced properties immediately after init
-        await Analytics.identify(userId, {
-          app_version: process.env.NEXT_PUBLIC_APP_VERSION ?? 'development',
-          platform: 'tauri',
-          first_seen: new Date().toISOString(),
-          os: navigator.platform,
-        });
-
-        // Start analytics session with the same user ID
-        await Analytics.startSession(userId);
-
-        // Track app started (re-enabled)
-        await Analytics.trackAppStarted();
-
-        // Track that user enabled analytics
-        try {
-          await invoke('track_analytics_enabled');
-        } catch (error) {
-          console.error('Failed to track analytics enabled:', error);
-        }
-
-        console.log('Analytics re-enabled successfully');
-      } else {
-        // Track that user disabled analytics BEFORE disabling
-        try {
-          await invoke('track_analytics_disabled');
-        } catch (error) {
-          console.error('Failed to track analytics disabled:', error);
-        }
-
-        await Analytics.disable();
-        console.log('Analytics disabled successfully');
-      }
-    } catch (error) {
-      console.error('Failed to toggle analytics:', error);
-      // Revert the optimistic update on error
-      setIsAnalyticsOptedIn(!enabled);
-      // You could also show a toast notification here to inform the user
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleConfirmDisable = async () => {
-    setShowModal(false);
-    await performToggle(false);
-  };
-
-  const handleCancelDisable = () => {
-    setShowModal(false);
-    // Keep analytics enabled, no state change needed
-  };
-
-  return (
-    <>
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-base font-semibold text-gray-800 mb-2">{lt('Usage Analytics')}</h3>
-          <p className="text-sm text-gray-600 mb-4">
-            {lt('Usage analytics is off by default. You can turn it on to share anonymous product and performance data; no personal content is collected.')}
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <div>
-            <h4 className="font-semibold text-gray-800">{lt('Enable Analytics')}</h4>
-            <p className="text-sm text-gray-600">
-              {isProcessing ? lt('Updating...') : lt('Off unless you choose to enable it')}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 ml-4">
-            {isProcessing && (
-              <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
-            )}
-            <Switch
-              checked={isAnalyticsOptedIn}
-              onCheckedChange={handleToggle}
-              disabled={isProcessing}
-            />
-          </div>
-        </div>
-
-        {/* User ID Display */}
-        {isAnalyticsOptedIn && userId && (
-          <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-800 mb-1">{lt('Your User ID')}</div>
-                <p className="text-xs text-gray-600 mb-2">
-                  {lt('Share this ID when reporting issues to help us investigate your issue logs')}
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="text-xs text-gray-700 bg-white px-2 py-1 rounded border border-gray-300 font-mono flex-1 truncate">
-                    {userId}
-                  </code>
-                  <Button
-                    onClick={handleCopyUserId}
-                    variant="outline"
-                    size="sm"
-                    className="flex-shrink-0"
-                    title={lt('Copy User ID')}
-                  >
-                    {isCopied ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-green-600" />
-                        <span className="text-green-600">{lt('Copied!')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>{lt('Copy')}</span>
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="flex items-start gap-2 p-2 bg-blue-50 rounded border border-blue-200">
-          <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-          <div className="text-xs text-blue-700">
-            <p className="mb-1">
-              {lt('Your meetings, transcripts, and recordings remain completely private and local.')}
-            </p>
-            <p>{lt('The CalMee privacy policy is included with the source distribution.')}</p>
-          </div>
-        </div>
+  return <div className="space-y-4">
+    <div className="flex items-start justify-between gap-6">
+      <div className="min-w-0">
+        <h3 className="text-[15px] font-semibold text-foreground">{lt('Usage Analytics')}</h3>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{zh ? '只在本机统计 CalMee 的使用概览，不上传会议、录音、文字稿或笔记内容。' : 'Shows a local CalMee usage overview. Meeting, recording, transcript, and note content never leaves this device.'}</p>
       </div>
-
-      {/* 2-Step Opt-Out Modal */}
-      <AnalyticsDataModal
-        isOpen={showModal}
-        onClose={handleCancelDisable}
-        onConfirmDisable={handleConfirmDisable}
-      />
-    </>
-  );
+      <Switch checked={visible} onCheckedChange={setVisible} aria-label={zh ? '显示本机使用概览' : 'Show local usage overview'} />
+    </div>
+    {visible && <div className="border-t border-border/70 pt-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-foreground">{lt('Local usage overview')}</span>
+        <div className="flex rounded-lg bg-muted p-0.5">{(['7d','30d','all'] as Period[]).map(value => <button type="button" key={value} onClick={() => setPeriod(value)} className={`rounded-md px-2.5 py-1 text-[11px] transition ${period === value ? 'bg-card font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{value === '7d' ? lt('7 days') : value === '30d' ? lt('30 days') : lt('All time')}</button>)}</div>
+      </div>
+      {statsLoading ? <div className="flex h-20 items-center justify-center rounded-lg bg-muted/45"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div> : stats ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{metrics.map(([Icon,label,value]) => <div key={label} className="rounded-lg bg-muted/45 p-3"><Icon className="mb-2 h-4 w-4 text-primary"/><div className="text-lg font-semibold tabular-nums text-foreground">{value}</div><div className="mt-0.5 text-[10px] text-muted-foreground">{label}</div></div>)}</div> : <div className="rounded-lg bg-muted/45 px-4 py-5 text-sm text-muted-foreground">{zh ? '暂时无法读取本机使用数据，请稍后再试。' : 'Local usage data is temporarily unavailable. Try again later.'}</div>}
+    </div>}
+  </div>;
 }

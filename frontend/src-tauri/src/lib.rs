@@ -219,7 +219,13 @@ async fn discard_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String> 
     let folder_path = payload
         .folder_path
         .ok_or_else(|| "The current recording folder was unavailable".to_string())?;
-    audio::recording_commands::discard_saved_recording_folder(&folder_path)?;
+    let preferences = audio::recording_preferences::load_recording_preferences(&app)
+        .await
+        .map_err(|error| format!("Failed to load recording preferences: {error}"))?;
+    audio::recording_commands::discard_saved_recording_folder(
+        &preferences.save_folder,
+        &folder_path,
+    )?;
 
     RECORDING_FLAG.store(false, Ordering::SeqCst);
     tray::update_tray_menu(&app);
@@ -759,6 +765,11 @@ pub fn run() {
             meeting_workspace::api_save_meeting_document,
             meeting_workspace::api_get_meeting_notes,
             meeting_workspace::api_save_meeting_notes,
+            meeting_workspace::api_create_notes_only_meeting,
+            meeting_workspace::api_create_meeting_draft,
+            meeting_workspace::api_discard_empty_meeting_draft,
+            meeting_workspace::api_cleanup_empty_meeting_drafts,
+            meeting_workspace::api_get_local_usage_stats,
             meeting_workspace::api_batch_correct_meeting_documents,
             meeting_workspace::api_restore_previous_meeting_document,
             meeting_workspace::api_list_meeting_tags,
@@ -773,6 +784,8 @@ pub fn run() {
             meeting_workspace::api_save_generation_preference,
             meeting_workspace::api_link_meeting_calendar_event,
             meeting_workspace::api_get_linked_calendar_event,
+            meeting_workspace::api_get_calendar_link_candidates,
+            meeting_workspace::api_get_calendar_link_review_count,
             meeting_workspace::api_get_meeting_audio_path,
             meeting_workspace::api_repair_legacy_meeting_audio,
             meeting_workspace::api_get_meeting_speaker_options,
@@ -857,6 +870,12 @@ pub fn run() {
             api::api_test_transcript_connection,
             api::api_save_transcript_provider_credentials,
             api::api_get_transcript_provider_credentials,
+            api::api_list_custom_model_profiles,
+            api::api_save_custom_model_profile,
+            api::api_delete_custom_model_profile,
+            api::api_activate_custom_model_profile,
+            api::api_discover_custom_profile_models,
+            api::api_test_custom_model_profile,
             // Summary commands
             summary::commands::api_process_transcript,
             summary::commands::api_get_summary,

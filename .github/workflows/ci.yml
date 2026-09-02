@@ -43,6 +43,7 @@ jobs:
       - run: node scripts/version.mjs --check
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit --incremental false
+      - run: node --test scripts/test-refresh-consistency.mjs scripts/test-dedao-notes.mjs
       - run: pnpm run build
 
   rust:

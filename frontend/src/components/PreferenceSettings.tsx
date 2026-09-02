@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react"
 import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
-import { invoke } from "@tauri-apps/api/core"
+import { invoke } from "@/lib/data-invoke"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
@@ -158,35 +158,25 @@ export function PreferenceSettings() {
       <SettingsSection
         title={notificationsLabel}
         description={lt('Enable or disable notifications of start and end of meeting')}
-      >
-        <div className="flex items-center justify-between gap-6 border-t border-border/70 pt-4">
-          <span className="text-sm font-medium text-foreground">{notificationsLabel}</span>
-          <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
-        </div>
-      </SettingsSection>
+        actions={<Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />}
+      />
 
       <SettingsSection
         title={lt('Data Storage Locations')}
         description={lt('View and access where CalMee stores your data')}
       >
-          <div className="rounded-lg border border-border/70 bg-muted/35 p-4">
-            <div className="mb-2 text-sm font-medium text-foreground">{lt('Meeting Recordings')}</div>
-            <div className="mb-3 break-all font-mono text-xs text-muted-foreground">
-              {storageLocations?.recordings || lt('Loading...')}
-            </div>
-            <ProductButton
-              size="sm"
-              onClick={() => handleOpenFolder('recordings')}
-            >
-              <FolderOpen className="w-4 h-4" />
-              {lt('Open Folder')}
-            </ProductButton>
+        <div className="rounded-lg border border-border/70 bg-muted/35 p-4">
+          <div className="mb-2 text-sm font-medium text-foreground">{lt('Application Data')}</div>
+          <div className="mb-3 break-all font-mono text-xs text-muted-foreground">
+            {storageLocations?.database || lt('Loading...')}
           </div>
-
-        <div className="mt-4 rounded-lg bg-muted/60 px-3 py-2.5">
-          <p className="text-xs leading-5 text-muted-foreground">
-            <strong>{lt('Note:')}</strong> {lt('Database and models are stored together in your application data directory for unified management.')}
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <ProductButton size="sm" onClick={() => handleOpenFolder('database')}><FolderOpen className="h-4 w-4" />{lt('Open Folder')}</ProductButton>
+            <ProductButton size="sm" onClick={() => handleOpenFolder('models')}><FolderOpen className="h-4 w-4" />{lt('Open Models Folder')}</ProductButton>
+          </div>
+        </div>
+        <div className="mt-3 text-xs leading-5 text-muted-foreground">
+          {lt('The application data location is managed by the operating system and cannot be changed here. The recording location can be changed under Recording.')}
         </div>
       </SettingsSection>
 

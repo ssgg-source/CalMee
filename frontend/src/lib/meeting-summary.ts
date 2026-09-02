@@ -1,7 +1,9 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
+import { dataRevision } from './data-events';
 
 type CacheEntry = {
   requestedAt: number;
+  revision: number;
   request: Promise<any>;
 };
 
@@ -16,12 +18,14 @@ const DEDUPE_WINDOW_MS = 1_000;
 export function getMeetingSummary(meetingId: string, force = false): Promise<any> {
   const now = Date.now();
   const cached = summaryRequests.get(meetingId);
-  if (!force && cached && now - cached.requestedAt < DEDUPE_WINDOW_MS) {
+  const revision = dataRevision(`documents:${meetingId}`);
+  if (!force && cached && cached.revision === revision && now - cached.requestedAt < DEDUPE_WINDOW_MS) {
     return cached.request;
   }
 
   const request = invoke('api_get_summary', { meetingId });
-  summaryRequests.set(meetingId, { requestedAt: now, request });
+  summaryRequests.set(meetingId, { requestedAt: now, request, revision });
+  if (summaryRequests.size > 24) summaryRequests.delete(summaryRequests.keys().next().value!);
   return request;
 }
 

@@ -3,7 +3,7 @@ import { Transcript, Summary } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
-import { invoke as invokeTauri } from '@tauri-apps/api/core';
+import { invoke as invokeTauri } from '@/lib/data-invoke';
 
 interface UseCopyOperationsProps {
   meeting: any;

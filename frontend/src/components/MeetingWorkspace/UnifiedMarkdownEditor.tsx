@@ -24,7 +24,10 @@ import '@blocknote/shadcn/style.css';
 import '@blocknote/core/fonts/inter.css';
 import { useLanguage } from '@/contexts/LanguageContext';
 
+import { readViewState, writeViewState } from '@/lib/view-state';
+
 export interface UnifiedMarkdownEditorRef {
+  markSaved: (markdown: string) => void;
   getMarkdown: () => Promise<string>;
   focus: () => void;
   appendMarkdown: (markdown: string) => Promise<string>;
@@ -185,6 +188,15 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
   const dirtyRef = useRef(onDirtyChange);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [count, setCount] = useState(() => characterCount(value));
+  const positionKey = `editor-position:${documentKey.replace(/:\d+$/, '')}`;
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const saved = readViewState<number>(positionKey);
+    if (container && saved !== undefined) container.scrollTop = saved;
+    const remember = () => { if (container) writeViewState(positionKey, container.scrollTop); };
+    container?.addEventListener('scroll', remember, { passive: true });
+    return () => { remember(); container?.removeEventListener('scroll', remember); };
+  }, [positionKey]);
 
   const editor = useCreateBlockNote({
     dictionary: locale === 'zh-CN' ? zh : en,
@@ -314,7 +326,7 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
       if (!live) return;
       editor.replaceBlocks(editor.document, blocks.length ? blocks : [{ type: 'paragraph' }]);
       markdownRef.current = source;
-      window.requestAnimationFrame(() => { if (live) loadedRef.current = true; });
+      window.requestAnimationFrame(() => { if (live) { loadedRef.current = true; const top = readViewState<number>(positionKey); if (top !== undefined && scrollContainerRef.current) scrollContainerRef.current.scrollTop = top; } });
     }).catch(error => {
       console.error('Failed to load Markdown document', error);
       loadedRef.current = true;
@@ -351,6 +363,7 @@ export const UnifiedMarkdownEditor = forwardRef<UnifiedMarkdownEditorRef, Unifie
       window.requestAnimationFrame(() => editor.focus());
       return markdown;
     },
+    markSaved: (markdown) => { initialRef.current = markdown; dirtyRef.current?.(markdownRef.current.trim() !== markdown.trim()); },
     setMarkdown: async (markdown) => {
       if (markdown === markdownRef.current) return;
       const blocks = await editor.tryParseMarkdownToBlocks(markdown || '');

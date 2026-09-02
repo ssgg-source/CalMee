@@ -1,12 +1,272 @@
 use crate::state::AppState;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row};
+use sqlx::{FromRow, Row, SqlitePool};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarLinkResult {
+    pub event: Option<crate::calendar_integration::CalendarEvent>,
+    pub displaced_meeting_id: Option<String>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarLinkCandidate {
+    pub event: crate::calendar_integration::CalendarEvent,
+    pub score: i64,
+    pub reason_codes: Vec<String>,
+    pub occupied_by_meeting_id: Option<String>,
+    pub occupied_by_title: Option<String>,
+}
+
+#[cfg(test)]
+mod calendar_link_tests {
+    use super::*;
+    const MIGRATION: &str =
+        include_str!("../migrations/20260902100000_add_meeting_calendar_links.sql");
+    async fn pool(migrate: bool) -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql("PRAGMA foreign_keys=ON;
+            CREATE TABLE meetings(id TEXT PRIMARY KEY,title TEXT,created_at TEXT,updated_at TEXT,meeting_start_time TEXT,meeting_end_time TEXT,calendar_event_id TEXT);
+            CREATE TABLE calendar_events(id TEXT PRIMARY KEY,source TEXT,external_id TEXT,calendar_name TEXT,title TEXT,start_at TEXT,end_at TEXT,location TEXT,notes TEXT,meeting_id TEXT REFERENCES meetings(id) ON DELETE SET NULL,calendar_id TEXT,href TEXT,etag TEXT,all_day INTEGER);
+            CREATE TABLE calendar_collections(id TEXT PRIMARY KEY,enabled INTEGER);
+            INSERT INTO meetings VALUES('a','Fixture A','2026-09-02T10:00:00Z','now','2026-09-02T10:00:00Z',NULL,NULL),('b','Fixture B','2026-09-02T11:00:00Z','now','2026-09-02T11:00:00Z',NULL,NULL);
+            INSERT INTO calendar_events(id,source,external_id,title,start_at,all_day) VALUES('e','local','fixture-e','Fixture event','2026-09-02T12:00:00Z',0);")
+            .execute(&pool).await.unwrap();
+        if migrate {
+            sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+    async fn link(
+        pool: &SqlitePool,
+        meeting: &str,
+        event: Option<&str>,
+        replace: bool,
+        expected: Option<&str>,
+    ) -> Result<CalendarLinkResult, String> {
+        set_calendar_link(
+            pool,
+            meeting.into(),
+            event.map(str::to_owned),
+            replace,
+            "manual".into(),
+            false,
+            expected.map(str::to_owned),
+            None,
+        )
+        .await
+    }
+    async fn pairs(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as(
+            "SELECT meeting_id,calendar_event_id FROM meeting_calendar_links ORDER BY meeting_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn occupied_event_requires_explicit_current_owner_confirmation() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        assert!(link(&pool, "b", Some("e"), false, None)
+            .await
+            .unwrap_err()
+            .contains("CONFLICT"));
+        assert!(link(&pool, "b", Some("e"), true, Some("wrong-owner"))
+            .await
+            .unwrap_err()
+            .contains("CHANGED"));
+        assert_eq!(pairs(&pool).await, vec![("a".into(), "e".into())]);
+        let result = link(&pool, "b", Some("e"), true, Some("a")).await.unwrap();
+        assert_eq!(result.displaced_meeting_id.as_deref(), Some("a"));
+        assert_eq!(pairs(&pool).await, vec![("b".into(), "e".into())]);
+        let old: Option<String> =
+            sqlx::query_scalar("SELECT calendar_event_id FROM meetings WHERE id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(old.is_none());
+        let reverse: String =
+            sqlx::query_scalar("SELECT meeting_id FROM calendar_events WHERE id='e'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reverse, "b");
+    }
+    #[tokio::test]
+    async fn unlink_preserves_meeting_and_time_and_has_no_dangling_projection() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        link(&pool, "a", None, false, None).await.unwrap();
+        assert!(pairs(&pool).await.is_empty());
+        let row: (String, Option<String>) = sqlx::query_as(
+            "SELECT meeting_start_time,calendar_event_id FROM meetings WHERE id='a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("2026-09-02T10:00:00Z".into(), None));
+        let reverse: Option<String> =
+            sqlx::query_scalar("SELECT meeting_id FROM calendar_events WHERE id='e'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(reverse.is_none());
+    }
+    #[tokio::test]
+    async fn transfer_failure_rolls_back_entire_pair() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        sqlx::raw_sql("CREATE TRIGGER fail_link BEFORE UPDATE OF meeting_id ON calendar_events WHEN NEW.meeting_id='b' BEGIN SELECT RAISE(ABORT,'fixture failure'); END;").execute(&pool).await.unwrap();
+        assert!(link(&pool, "b", Some("e"), true, Some("a")).await.is_err());
+        assert_eq!(pairs(&pool).await, vec![("a".into(), "e".into())]);
+        let reverse: String =
+            sqlx::query_scalar("SELECT meeting_id FROM calendar_events WHERE id='e'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reverse, "a");
+        let forward: String =
+            sqlx::query_scalar("SELECT calendar_event_id FROM meetings WHERE id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(forward, "e");
+    }
+    #[tokio::test]
+    async fn migration_preserves_conflicting_claims_without_guessing() {
+        let pool = pool(false).await;
+        sqlx::raw_sql(
+            "UPDATE meetings SET calendar_event_id='e'; UPDATE calendar_events SET meeting_id='b';",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
+        assert!(pairs(&pool).await.is_empty());
+        let claims: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM meeting_calendar_link_legacy_claims WHERE resolved=0",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(claims, 3);
+        let stale: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM meetings WHERE calendar_event_id IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stale, 0);
+    }
+    #[tokio::test]
+    async fn migration_keeps_unambiguous_one_sided_link() {
+        let pool = pool(false).await;
+        sqlx::query("UPDATE meetings SET calendar_event_id='e' WHERE id='a'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
+        assert_eq!(pairs(&pool).await, vec![("a".into(), "e".into())]);
+        let reverse: String =
+            sqlx::query_scalar("SELECT meeting_id FROM calendar_events WHERE id='e'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reverse, "a");
+    }
+    #[tokio::test]
+    async fn source_event_delete_keeps_meeting_and_clears_link() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        sqlx::query("DELETE FROM calendar_events WHERE id='e'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(pairs(&pool).await.is_empty());
+        let forward: Option<String> =
+            sqlx::query_scalar("SELECT calendar_event_id FROM meetings WHERE id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(forward.is_none());
+    }
+    #[tokio::test]
+    async fn missing_target_does_not_remove_existing_link() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        assert!(link(&pool, "a", Some("missing"), false, None)
+            .await
+            .is_err());
+        assert_eq!(pairs(&pool).await, vec![("a".into(), "e".into())]);
+    }
+    #[tokio::test]
+    async fn stale_window_cannot_unlink_a_changed_association() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        let error = set_calendar_link(
+            &pool,
+            "a".into(),
+            None,
+            false,
+            "manual".into(),
+            false,
+            None,
+            Some("old-event".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("CHANGED"));
+        assert_eq!(pairs(&pool).await, vec![("a".into(), "e".into())]);
+    }
+    #[tokio::test]
+    async fn candidates_include_current_link_and_search_other_synced_dates() {
+        let pool = pool(true).await;
+        link(&pool, "a", Some("e"), false, None).await.unwrap();
+        let candidates = load_calendar_link_candidates(&pool, Some("a".into()), None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(candidates[0].event.id, "e");
+        assert!(candidates[0]
+            .reason_codes
+            .contains(&"currently_linked".into()));
+        sqlx::query("UPDATE calendar_events SET start_at='2020-01-01T00:00:00Z' WHERE id='e'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let candidates = load_calendar_link_candidates(
+            &pool,
+            Some("b".into()),
+            None,
+            None,
+            Some("Fixture".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(candidates[0].occupied_by_meeting_id.as_deref(), Some("a"));
+        assert!(load_calendar_link_candidates(
+            &pool,
+            Some("b".into()),
+            None,
+            None,
+            Some("%".into())
+        )
+        .await
+        .unwrap()
+        .is_empty());
+    }
+}
 
 fn replace_count(source: &str, from: &str) -> usize {
     source.match_indices(from).count()
@@ -318,9 +578,336 @@ pub async fn api_save_meeting_notes(
     .await
     .map_err(|error| error.to_string())?;
 
+    if !notes_markdown.trim().is_empty() {
+        promote_meeting_draft(state.db_manager.pool(), &meeting_id).await?;
+    }
+
     api_get_meeting_notes(state, meeting_id)
         .await?
         .ok_or_else(|| "Failed to read saved meeting notes".to_string())
+}
+
+async fn promote_meeting_draft(pool: &SqlitePool, meeting_id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE meetings SET source='calmee',updated_at=? WHERE id=? AND source='calmee-draft'",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(meeting_id)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn discard_empty_meeting_drafts(
+    pool: &SqlitePool,
+    meeting_id: Option<&str>,
+) -> Result<u64, String> {
+    let result = sqlx::query(
+        "DELETE FROM meetings
+         WHERE source='calmee-draft'
+           AND (? IS NULL OR id=?)
+           AND COALESCE(trim(folder_path),'')=''
+           AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.meeting_id=meetings.id AND trim(t.transcript)<>'')
+           AND NOT EXISTS (SELECT 1 FROM meeting_notes n WHERE n.meeting_id=meetings.id AND COALESCE(trim(n.notes_markdown),'')<>'')
+           AND NOT EXISTS (SELECT 1 FROM meeting_documents d WHERE d.meeting_id=meetings.id AND trim(d.markdown)<>'')
+           AND NOT EXISTS (SELECT 1 FROM summary_processes s WHERE s.meeting_id=meetings.id AND COALESCE(trim(s.result),'')<>'')",
+    )
+    .bind(meeting_id)
+    .bind(meeting_id)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(result.rows_affected())
+}
+
+#[tauri::command]
+pub async fn api_create_meeting_draft(
+    state: tauri::State<'_, AppState>,
+    title: String,
+) -> Result<serde_json::Value, String> {
+    let meeting_id = format!("meeting-{}", Uuid::new_v4());
+    let now = Utc::now().to_rfc3339();
+    let title = title.trim();
+    let title = if title.is_empty() {
+        "Untitled meeting"
+    } else {
+        title
+    };
+    sqlx::query("INSERT INTO meetings(id,title,created_at,updated_at,meeting_start_time,source) VALUES(?,?,?,?,?,?)")
+        .bind(&meeting_id)
+        .bind(title)
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .bind("calmee-draft")
+        .execute(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({ "meetingId": meeting_id, "title": title }))
+}
+
+#[tauri::command]
+pub async fn api_discard_empty_meeting_draft(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<bool, String> {
+    Ok(discard_empty_meeting_drafts(state.db_manager.pool(), Some(&meeting_id)).await? > 0)
+}
+
+#[tauri::command]
+pub async fn api_cleanup_empty_meeting_drafts(
+    state: tauri::State<'_, AppState>,
+) -> Result<u64, String> {
+    discard_empty_meeting_drafts(state.db_manager.pool(), None).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageStats {
+    pub meetings: i64,
+    pub recordings: i64,
+    pub transcript_characters: i64,
+    pub note_characters: i64,
+    pub transcribed_seconds: f64,
+}
+
+#[tauri::command]
+pub async fn api_get_local_usage_stats(
+    state: tauri::State<'_, AppState>,
+    since: Option<String>,
+) -> Result<LocalUsageStats, String> {
+    let pool = state.db_manager.pool();
+    let meetings = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM meetings WHERE COALESCE(source,'')<>'calmee-draft' AND (? IS NULL OR created_at>=?)",
+    )
+    .bind(&since).bind(&since).fetch_one(pool).await.map_err(|error| error.to_string())?;
+    let recordings = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM meetings WHERE COALESCE(source,'')<>'calmee-draft' AND COALESCE(TRIM(folder_path),'')<>'' AND (? IS NULL OR created_at>=?)",
+    )
+    .bind(&since).bind(&since).fetch_one(pool).await.map_err(|error| error.to_string())?;
+    let transcript_characters = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(LENGTH(t.transcript)),0) FROM transcripts t JOIN meetings m ON m.id=t.meeting_id WHERE COALESCE(m.source,'')<>'calmee-draft' AND (? IS NULL OR m.created_at>=?)",
+    )
+    .bind(&since).bind(&since).fetch_one(pool).await.map_err(|error| error.to_string())?;
+    let note_characters = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(LENGTH(n.notes_markdown)),0) FROM meeting_notes n JOIN meetings m ON m.id=n.meeting_id WHERE COALESCE(m.source,'')<>'calmee-draft' AND (? IS NULL OR m.created_at>=?)",
+    )
+    .bind(&since).bind(&since).fetch_one(pool).await.map_err(|error| error.to_string())?;
+    let transcribed_seconds = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(last_audio),0.0) FROM (SELECT MAX(COALESCE(t.audio_end_time,0.0)) AS last_audio FROM transcripts t JOIN meetings m ON m.id=t.meeting_id WHERE COALESCE(m.source,'')<>'calmee-draft' AND (? IS NULL OR m.created_at>=?) GROUP BY t.meeting_id)",
+    )
+    .bind(&since).bind(&since).fetch_one(pool).await.map_err(|error| error.to_string())?;
+    Ok(LocalUsageStats {
+        meetings,
+        recordings,
+        transcript_characters,
+        note_characters,
+        transcribed_seconds,
+    })
+}
+
+#[tauri::command]
+pub async fn api_create_notes_only_meeting(
+    state: tauri::State<'_, AppState>,
+    title: String,
+    notes_markdown: String,
+    notes_json: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let meeting_id = create_notes_only_meeting(
+        state.db_manager.pool(),
+        &title,
+        &notes_markdown,
+        notes_json.as_deref(),
+    )
+    .await?;
+    Ok(serde_json::json!({ "meetingId": meeting_id }))
+}
+
+async fn create_notes_only_meeting(
+    pool: &SqlitePool,
+    title: &str,
+    notes_markdown: &str,
+    notes_json: Option<&str>,
+) -> Result<String, String> {
+    if notes_markdown.trim().is_empty() {
+        return Err("Meeting notes cannot be empty".to_string());
+    }
+
+    let meeting_id = format!("meeting-{}", Uuid::new_v4());
+    let now = Utc::now().to_rfc3339();
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO meetings(id,title,created_at,updated_at,meeting_start_time,source) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&meeting_id)
+    .bind(title.trim())
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .bind("calmee")
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO meeting_notes(meeting_id,notes_markdown,notes_json,created_at,updated_at) VALUES(?,?,?,?,?)",
+    )
+    .bind(&meeting_id)
+    .bind(notes_markdown)
+    .bind(notes_json)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(meeting_id)
+}
+
+#[cfg(test)]
+mod notes_only_meeting_tests {
+    use super::{create_notes_only_meeting, discard_empty_meeting_drafts};
+    use sqlx::SqlitePool;
+
+    async fn meeting_schema(pool: &SqlitePool) {
+        sqlx::query("CREATE TABLE meetings(id TEXT PRIMARY KEY,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,meeting_start_time TEXT,source TEXT)")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn notes_only_meeting_is_created_atomically() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        meeting_schema(&pool).await;
+        sqlx::query("CREATE TABLE meeting_notes(meeting_id TEXT PRIMARY KEY,notes_markdown TEXT,notes_json TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(meeting_id) REFERENCES meetings(id) ON DELETE CASCADE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let meeting_id = create_notes_only_meeting(
+            &pool,
+            "Design review",
+            "Confirm the release date",
+            Some(r#"{"source":"live-recording"}"#),
+        )
+        .await
+        .unwrap();
+
+        let meeting_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meetings WHERE id=?")
+            .bind(&meeting_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let notes_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM meeting_notes WHERE meeting_id=?")
+                .bind(&meeting_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((meeting_count, notes_count), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn notes_failure_rolls_back_the_meeting() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        meeting_schema(&pool).await;
+
+        assert!(
+            create_notes_only_meeting(&pool, "Design review", "A real note", None)
+                .await
+                .is_err()
+        );
+
+        let meeting_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meetings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(meeting_count, 0);
+    }
+
+    async fn draft_schema(pool: &SqlitePool) {
+        sqlx::query("CREATE TABLE meetings(id TEXT PRIMARY KEY,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,folder_path TEXT,meeting_start_time TEXT,source TEXT)")
+            .execute(pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE transcripts(id TEXT PRIMARY KEY,meeting_id TEXT,transcript TEXT)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE meeting_notes(meeting_id TEXT PRIMARY KEY,notes_markdown TEXT)")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE meeting_documents(meeting_id TEXT,markdown TEXT)")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE summary_processes(meeting_id TEXT,result TEXT)")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_empty_calmee_drafts_are_discarded() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        draft_schema(&pool).await;
+        for (id, source) in [("empty-draft", "calmee-draft"), ("normal", "calmee")] {
+            sqlx::query(
+                "INSERT INTO meetings(id,title,created_at,updated_at,source) VALUES(?,?,?,?,?)",
+            )
+            .bind(id)
+            .bind("Untitled")
+            .bind("now")
+            .bind("now")
+            .bind(source)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO meetings(id,title,created_at,updated_at,source) VALUES('notes-draft','Untitled','now','now','calmee-draft')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO meeting_notes(meeting_id,notes_markdown) VALUES('notes-draft','Keep this note')")
+            .execute(&pool).await.unwrap();
+
+        assert_eq!(discard_empty_meeting_drafts(&pool, None).await.unwrap(), 1);
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM meetings ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec!["normal", "notes-draft"]);
+    }
+
+    #[tokio::test]
+    async fn targeted_discard_never_removes_other_drafts() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        draft_schema(&pool).await;
+        for id in ["draft-a", "draft-b"] {
+            sqlx::query("INSERT INTO meetings(id,title,created_at,updated_at,source) VALUES(?,?,?,?, 'calmee-draft')")
+                .bind(id).bind("Untitled").bind("now").bind("now")
+                .execute(&pool).await.unwrap();
+        }
+
+        assert_eq!(
+            discard_empty_meeting_drafts(&pool, Some("draft-a"))
+                .await
+                .unwrap(),
+            1
+        );
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM meetings")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec!["draft-b"]);
+    }
 }
 
 fn validate_kind(kind: &str) -> Result<(), String> {
@@ -364,6 +951,9 @@ pub async fn api_save_meeting_document<R: Runtime>(
     sqlx::query("INSERT INTO meeting_documents (meeting_id,kind,context_key,markdown,language,template_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,kind,context_key) DO UPDATE SET previous_markdown=CASE WHEN meeting_documents.markdown<>excluded.markdown THEN meeting_documents.markdown ELSE meeting_documents.previous_markdown END,markdown=excluded.markdown,language=excluded.language,template_id=excluded.template_id,updated_at=excluded.updated_at")
         .bind(&meeting_id).bind(&kind).bind(&context_key).bind(markdown.trim()).bind(&language).bind(&template_id).bind(&now).bind(&now)
         .execute(state.db_manager.pool()).await.map_err(|e| e.to_string())?;
+    if !markdown.trim().is_empty() {
+        promote_meeting_draft(state.db_manager.pool(), &meeting_id).await?;
+    }
     if kind == "smart_record" {
         // Meeting summaries depend on the saved Smart Record. Preserve the
         // existing summary, but mark it stale whenever that source changes.
@@ -763,34 +1353,155 @@ pub async fn api_link_meeting_calendar_event<R: Runtime>(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
     event_id: Option<String>,
-) -> Result<(), String> {
-    let pool = state.db_manager.pool();
+    replace_existing: Option<bool>,
+    link_method: Option<String>,
+    sync_schedule: Option<bool>,
+    expected_occupied_meeting_id: Option<String>,
+    expected_current_event_id: Option<String>,
+) -> Result<CalendarLinkResult, String> {
+    set_calendar_link(
+        state.db_manager.pool(),
+        meeting_id,
+        event_id,
+        replace_existing.unwrap_or(false),
+        link_method.unwrap_or_else(|| "manual".into()),
+        sync_schedule.unwrap_or(false),
+        expected_occupied_meeting_id,
+        expected_current_event_id,
+    )
+    .await
+}
+
+async fn set_calendar_link(
+    pool: &SqlitePool,
+    meeting_id: String,
+    event_id: Option<String>,
+    replace_existing: bool,
+    link_method: String,
+    sync_schedule: bool,
+    expected_occupied_meeting_id: Option<String>,
+    expected_current_event_id: Option<String>,
+) -> Result<CalendarLinkResult, String> {
+    if !["manual", "recording", "suggested"].contains(&link_method.as_str()) {
+        return Err("Invalid calendar link method".into());
+    }
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE calendar_events SET meeting_id=NULL WHERE meeting_id=?")
+
+    let meeting_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM meetings WHERE id=?")
+        .bind(&meeting_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    if meeting_exists == 0 {
+        return Err("Meeting not found".into());
+    }
+    if let Some(expected) = expected_current_event_id {
+        let current = sqlx::query_scalar::<_, String>(
+            "SELECT calendar_event_id FROM meeting_calendar_links WHERE meeting_id=?",
+        )
+        .bind(&meeting_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if current.as_deref().unwrap_or("") != expected {
+            return Err("CALENDAR_LINK_CHANGED".into());
+        }
+    }
+
+    let event = if let Some(id) = event_id.as_ref() {
+        Some(sqlx::query_as::<_, crate::calendar_integration::CalendarEvent>("SELECT id,source,external_id,calendar_name,title,start_at,end_at,location,notes,meeting_id,calendar_id,href,etag,all_day FROM calendar_events WHERE id=?")
+            .bind(id).fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?.ok_or("Calendar event not found")?)
+    } else {
+        None
+    };
+    let incumbent = if let Some(id) = event_id.as_ref() {
+        sqlx::query_scalar::<_, String>("SELECT meeting_id FROM meeting_calendar_links WHERE calendar_event_id=? AND meeting_id<>?")
+            .bind(id).bind(&meeting_id).fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    if incumbent.is_some() && !replace_existing {
+        return Err("CALENDAR_LINK_CONFLICT".into());
+    }
+    if replace_existing && incumbent != expected_occupied_meeting_id {
+        return Err("CALENDAR_LINK_CHANGED".into());
+    }
+    let revision = Utc::now().timestamp_micros();
+
+    // Remove this meeting's old pair first. If the selected event is occupied,
+    // an explicit transfer also clears the previous meeting's projection.
+    sqlx::query("UPDATE calendar_events SET meeting_id=NULL WHERE id IN (SELECT calendar_event_id FROM meeting_calendar_links WHERE meeting_id=?)")
+        .bind(&meeting_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM meeting_calendar_links WHERE meeting_id=?")
         .bind(&meeting_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE meetings SET calendar_event_id=?,updated_at=? WHERE id=?")
-        .bind(&event_id)
+    sqlx::query("UPDATE meetings SET calendar_event_id=NULL,updated_at=? WHERE id=?")
         .bind(Utc::now().to_rfc3339())
         .bind(&meeting_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    if let Some(id) = event_id {
-        let result = sqlx::query("UPDATE calendar_events SET meeting_id=? WHERE id=?")
+
+    if let Some(previous) = incumbent.as_ref() {
+        sqlx::query("UPDATE meetings SET calendar_event_id=NULL,updated_at=? WHERE id=?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(previous)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM meeting_calendar_links WHERE meeting_id=?")
+            .bind(previous)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    // Also repair any contradictory projection left by an older build.
+    if let Some(id) = event_id.as_ref() {
+        sqlx::query("UPDATE meetings SET calendar_event_id=NULL,updated_at=? WHERE calendar_event_id=? AND id<>?")
+            .bind(Utc::now().to_rfc3339()).bind(id).bind(&meeting_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO meeting_calendar_links(meeting_id,calendar_event_id,link_method,sync_schedule,revision,linked_at,updated_at) VALUES(?,?,?,?,?,?,?)")
+            .bind(&meeting_id).bind(id).bind(&link_method)
+            .bind(sync_schedule).bind(revision).bind(&now).bind(&now)
+            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE calendar_events SET meeting_id=? WHERE id=?")
             .bind(&meeting_id)
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
-        if result.rows_affected() == 0 {
-            return Err("Calendar event not found".into());
+        if sync_schedule {
+            let selected = event.as_ref().expect("event checked above");
+            sqlx::query("UPDATE meetings SET calendar_event_id=?,meeting_start_time=?,meeting_end_time=?,updated_at=? WHERE id=?")
+                .bind(id).bind(&selected.start_at).bind(&selected.end_at).bind(&now).bind(&meeting_id)
+                .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        } else {
+            sqlx::query("UPDATE meetings SET calendar_event_id=?,updated_at=? WHERE id=?")
+                .bind(id)
+                .bind(&now)
+                .bind(&meeting_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
+    sqlx::query("UPDATE meeting_calendar_link_legacy_claims SET resolved=1 WHERE meeting_id=?")
+        .bind(&meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
+    let event = event.map(|mut event| {
+        event.meeting_id = Some(meeting_id);
+        event
+    });
+    Ok(CalendarLinkResult {
+        event,
+        displaced_meeting_id: incumbent,
+        revision,
+    })
 }
 
 #[tauri::command]
@@ -799,17 +1510,162 @@ pub async fn api_get_linked_calendar_event<R: Runtime>(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
 ) -> Result<Option<crate::calendar_integration::CalendarEvent>, String> {
-    let event_id: Option<String> = sqlx::query("SELECT calendar_event_id FROM meetings WHERE id=?")
-        .bind(meeting_id)
-        .fetch_optional(state.db_manager.pool())
-        .await
-        .map_err(|e| e.to_string())?
-        .and_then(|row| row.get("calendar_event_id"));
+    let event_id: Option<String> =
+        sqlx::query("SELECT calendar_event_id FROM meeting_calendar_links WHERE meeting_id=?")
+            .bind(&meeting_id)
+            .fetch_optional(state.db_manager.pool())
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|row| row.get("calendar_event_id"));
     let Some(event_id) = event_id else {
         return Ok(None);
     };
     sqlx::query_as::<_, crate::calendar_integration::CalendarEvent>("SELECT id,source,external_id,calendar_name,title,start_at,end_at,location,notes,meeting_id,calendar_id,href,etag,all_day FROM calendar_events WHERE id=?")
         .bind(event_id).fetch_optional(state.db_manager.pool()).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn api_get_calendar_link_candidates<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: Option<String>,
+    center_time: Option<String>,
+    title: Option<String>,
+    query: Option<String>,
+) -> Result<Vec<CalendarLinkCandidate>, String> {
+    load_calendar_link_candidates(
+        state.db_manager.pool(),
+        meeting_id,
+        center_time,
+        title,
+        query,
+    )
+    .await
+}
+
+async fn load_calendar_link_candidates(
+    pool: &SqlitePool,
+    meeting_id: Option<String>,
+    center_time: Option<String>,
+    title: Option<String>,
+    query: Option<String>,
+) -> Result<Vec<CalendarLinkCandidate>, String> {
+    let (title, center_raw) = if let Some(id) = meeting_id.as_ref() {
+        let row = sqlx::query("SELECT title,COALESCE(meeting_start_time,created_at) AS center FROM meetings WHERE id=?")
+            .bind(id).fetch_optional(pool).await.map_err(|e| e.to_string())?.ok_or("Meeting not found")?;
+        (
+            row.get::<String, _>("title"),
+            row.get::<String, _>("center"),
+        )
+    } else {
+        (
+            title.unwrap_or_default(),
+            center_time.unwrap_or_else(|| Utc::now().to_rfc3339()),
+        )
+    };
+    let center = chrono::DateTime::parse_from_rfc3339(&center_raw)
+        .map(|v| v.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+    let start = (center - chrono::Duration::days(7)).to_rfc3339();
+    let end = (center + chrono::Duration::days(7)).to_rfc3339();
+    let query = query.unwrap_or_default().trim().to_owned();
+    let pattern = format!(
+        "%{}%",
+        query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let events = sqlx::query_as::<_, crate::calendar_integration::CalendarEvent>("SELECT e.id,e.source,e.external_id,e.calendar_name,e.title,e.start_at,e.end_at,e.location,e.notes,e.meeting_id,e.calendar_id,e.href,e.etag,e.all_day FROM calendar_events e LEFT JOIN calendar_collections c ON c.id=e.calendar_id WHERE ((c.enabled=1 OR e.calendar_id IS NULL) AND ((?='' AND e.start_at>=? AND e.start_at<?) OR (?<>'' AND (e.title LIKE ? ESCAPE '\\' OR e.calendar_name LIKE ? ESCAPE '\\')))) OR e.id IN (SELECT calendar_event_id FROM meeting_calendar_links WHERE meeting_id=?) ORDER BY ABS(julianday(e.start_at)-julianday(?)) LIMIT 300")
+        .bind(&query).bind(start).bind(end).bind(&query).bind(&pattern).bind(&pattern).bind(meeting_id.as_deref().unwrap_or("")).bind(center.to_rfc3339())
+        .fetch_all(pool).await.map_err(|e| e.to_string())?;
+    let occupancies=sqlx::query_as::<_,(String,String,String)>("SELECT l.calendar_event_id,m.id,m.title FROM meeting_calendar_links l JOIN meetings m ON m.id=l.meeting_id")
+        .fetch_all(pool).await.map_err(|e|e.to_string())?.into_iter().map(|(event,id,title)|(event,(id,title))).collect::<HashMap<_,_>>();
+    let title_chars = title
+        .to_lowercase()
+        .chars()
+        .filter(|v| v.is_alphanumeric())
+        .collect::<std::collections::HashSet<_>>();
+    let mut result = Vec::with_capacity(events.len());
+    for event in events {
+        let Ok(event_time) =
+            chrono::DateTime::parse_from_rfc3339(&event.start_at).map(|v| v.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        let minutes = (event_time - center).num_minutes().abs();
+        let mut score = if minutes <= 30 {
+            70
+        } else if minutes <= 120 {
+            55
+        } else if minutes <= 1440 {
+            35
+        } else {
+            10
+        };
+        let mut reasons = vec![if minutes <= 120 {
+            "time_close".into()
+        } else {
+            "same_week".into()
+        }];
+        let event_end = event
+            .end_at
+            .as_ref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|v| v.with_timezone(&Utc))
+            .unwrap_or(event_time + chrono::Duration::hours(1));
+        if !event.all_day
+            && center >= event_time - chrono::Duration::minutes(15)
+            && center <= event_end + chrono::Duration::minutes(30)
+        {
+            score = 90;
+            reasons = vec!["time_overlap".into()];
+        } else if event.all_day {
+            score = 20;
+        }
+        let event_chars = event
+            .title
+            .to_lowercase()
+            .chars()
+            .filter(|v| v.is_alphanumeric())
+            .collect::<std::collections::HashSet<_>>();
+        let overlap = title_chars.intersection(&event_chars).count();
+        if overlap > 0 {
+            score += ((overlap * 30) / title_chars.len().max(event_chars.len()).max(1)) as i64;
+            reasons.push("title_similar".into());
+        }
+        let occupied = occupancies.get(&event.id).cloned();
+        if occupied
+            .as_ref()
+            .is_some_and(|(id, _)| Some(id) == meeting_id.as_ref())
+        {
+            score += 100;
+            reasons.push("currently_linked".into());
+        }
+        result.push(CalendarLinkCandidate {
+            event,
+            score,
+            reason_codes: reasons,
+            occupied_by_meeting_id: occupied.as_ref().map(|v| v.0.clone()),
+            occupied_by_title: occupied.map(|v| v.1),
+        });
+    }
+    result.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.event.start_at.cmp(&b.event.start_at))
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn api_get_calendar_link_review_count<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM meeting_calendar_link_legacy_claims WHERE meeting_id=? AND resolved=0")
+        .bind(meeting_id).fetch_one(state.db_manager.pool()).await.map_err(|e|e.to_string())
 }
 
 #[tauri::command]

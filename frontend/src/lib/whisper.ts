@@ -277,7 +277,7 @@ export function getRecommendedModel(systemSpecs?: { ram: number; cores: number }
 }
 
 // Tauri command wrappers for whisper-rs backend
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 
 export class WhisperAPI {
   static async init(): Promise<void> {

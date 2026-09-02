@@ -103,6 +103,7 @@ export default function PageContent({
     />
     <SelectionHotwordMenu>
       <MeetingWorkspaceShell
+        key={meeting.id}
         meeting={meeting}
         title={meetingData.meetingTitle}
         onTitleChange={meetingData.handleTitleChange}

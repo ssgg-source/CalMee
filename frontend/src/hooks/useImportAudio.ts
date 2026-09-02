@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import Analytics from '@/lib/analytics';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { dataRevision, subscribeDataChanges } from '@/lib/data-events';
+import { invoke } from "@/lib/data-invoke";
 import { AlertTriangle, BookText, Check, ChevronRight, FileUp, LayoutGrid, List, Loader2, Plus, Search, Tags, Trash2, UsersRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -25,10 +26,11 @@ type KnowledgeSettingsProps = {
 
 let knowledgeSnapshot: KnowledgeSnapshot | null = null;
 let knowledgeRequest: Promise<KnowledgeSnapshot> | null = null;
+let knowledgeRevision = -1;
 
 const fetchKnowledgeSnapshot = () => {
   if (knowledgeRequest) return knowledgeRequest;
-  knowledgeRequest = Promise.all([
+  const request = Promise.all([
     invoke<Person[]>("api_list_people"),
     invoke<Hotword[]>("api_list_hotwords"),
     invoke<LegacyPreview>("api_preview_legacy_hotword_disposition"),
@@ -37,9 +39,10 @@ const fetchKnowledgeSnapshot = () => {
     hotwords: hotwords.map((item) => ({ ...item, tags: item.tags || [item.category].filter(Boolean) })),
     legacy,
   })).finally(() => {
-    knowledgeRequest = null;
+    if (knowledgeRequest === request) knowledgeRequest = null;
   });
-  return knowledgeRequest;
+  knowledgeRequest = request;
+  return request;
 };
 
 export function KnowledgeSettings({ section: requestedSection, showSectionSwitcher = true }: KnowledgeSettingsProps = {}) {
@@ -66,8 +69,12 @@ export function KnowledgeSettings({ section: requestedSection, showSectionSwitch
   const [resolvingLegacy, setResolvingLegacy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const loadSequence = useRef(0);
 
   const load = async (force = false) => {
+    const sequence = ++loadSequence.current;
+    const revision = dataRevision('people') + dataRevision('hotwords');
+    if (force || knowledgeRevision !== revision) { knowledgeSnapshot = null; knowledgeRequest = null; knowledgeRevision = revision; }
     if (!force && knowledgeSnapshot) {
       setPeople(knowledgeSnapshot.people);
       setHotwords(knowledgeSnapshot.hotwords);
@@ -75,10 +82,11 @@ export function KnowledgeSettings({ section: requestedSection, showSectionSwitch
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!people.length && !hotwords.length) setLoading(true);
     try {
       if (force) knowledgeSnapshot = null;
       const snapshot = await fetchKnowledgeSnapshot();
+      if (sequence !== loadSequence.current || revision !== dataRevision('people') + dataRevision('hotwords')) return;
       knowledgeSnapshot = snapshot;
       setPeople(snapshot.people);
       setHotwords(snapshot.hotwords);
@@ -87,14 +95,18 @@ export function KnowledgeSettings({ section: requestedSection, showSectionSwitch
       reportTechnicalError("knowledge-load", error);
       toast.error(zh ? "数据加载失败" : "Could not load data", { description: toUserFacingError(error, locale).message });
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
+  const latestLoad = useRef(load);
+  latestLoad.current = load;
   useEffect(() => {
     void load();
     const saved = localStorage.getItem("calmeePeopleView");
     if (saved === "list" || saved === "cards") setPersonView(saved);
+    const off = subscribeDataChanges(['people', 'hotwords'], () => { void latestLoad.current(true); });
+    return () => { off(); loadSequence.current++; };
   }, []);
 
   useEffect(() => {

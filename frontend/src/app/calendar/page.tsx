@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { addDays, addMonths, addWeeks, eachDayOfInterval, endOfDay, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek, subMonths, subWeeks } from 'date-fns';
 import { enUS, zhCN } from 'date-fns/locale';
 import { Check, ChevronLeft, ChevronRight, Clock3, ExternalLink, Loader2, MapPin, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, RefreshCw, Settings2, Trash2 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { toast } from 'sonner';
 import { MeetingDeleteDialog } from '@/components/MeetingDeleteDialog';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -14,6 +14,9 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ProductButton, ProductInput, ProductSelect } from '@/components/ui/ProductControls';
+import { dataRevision, subscribeDataChanges } from '@/lib/data-events';
+import { RequestGate, StaleResultError } from '@/lib/refresh-state';
+import { CalendarLinkDialog } from '@/components/MeetingWorkspace/CalendarLinkDialog';
 
 type ViewMode='month'|'week'|'day';
 type CalendarCollection={id:string;source:string;accountKey:string;href:string;name:string;color:string;readOnly:boolean;enabled:boolean};
@@ -24,6 +27,13 @@ type CalendarRangeData={calendars:CalendarCollection[];events:CalendarEvent[]};
 
 const calendarRangeCache=new Map<string,CalendarRangeData>();
 const calendarRangeRequests=new Map<string,Promise<CalendarRangeData>>();
+let calendarRevision = -1;
+let calendarGeneration = 0;
+const invalidateCalendarCache = () => { calendarGeneration++; calendarRangeCache.clear(); calendarRangeRequests.clear(); };
+const checkCalendarRevision = () => {
+  const revision = dataRevision('calendar');
+  if (calendarRevision !== revision) { calendarRevision = revision; invalidateCalendarCache(); }
+};
 const CALENDAR_CACHE_LIMIT=12;
 const calendarRangeKey=(start:Date,end:Date)=>`${start.toISOString()}::${end.toISOString()}`;
 const cacheCalendarRange=(key:string,data:CalendarRangeData)=>{
@@ -36,8 +46,11 @@ const cacheCalendarRange=(key:string,data:CalendarRangeData)=>{
   }
 };
 const fetchCalendarRange=(start:Date,end:Date,force=false)=>{
+  checkCalendarRevision();
   const key=calendarRangeKey(start,end);
-  if(force)calendarRangeCache.clear();
+  if(force)invalidateCalendarCache();
+  const generation = calendarGeneration;
+  const revision = dataRevision('calendar');
   if(!force){
     const cached=calendarRangeCache.get(key);
     if(cached)return Promise.resolve(cached);
@@ -48,6 +61,7 @@ const fetchCalendarRange=(start:Date,end:Date,force=false)=>{
     invoke<CalendarCollection[]>('api_get_calendar_collections'),
     invoke<CalendarEvent[]>('api_get_calendar_events',{startAt:start.toISOString(),endAt:end.toISOString()}),
   ]).then(([calendars,events])=>{
+    if (generation !== calendarGeneration || revision !== dataRevision('calendar')) throw new StaleResultError();
     const data={calendars,events};
     cacheCalendarRange(key,data);
     return data;
@@ -73,12 +87,13 @@ export default function CalendarPage(){
   const [view,setView]=useState<ViewMode>(()=>{if(typeof window==='undefined')return 'month';const saved=localStorage.getItem('calmee-calendar-view');return saved==='day'||saved==='week'||saved==='month'?saved:'month';});
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>typeof window!=='undefined'&&localStorage.getItem('calmee-calendar-sidebar-collapsed')==='true');
   const [inboxCollapsed,setInboxCollapsed]=useState(()=>typeof window!=='undefined'&&localStorage.getItem('calmee-calendar-inbox-collapsed')==='true');
-  const [cursor,setCursor]=useState(new Date());
+  const [cursor,setCursor]=useState(() => { const saved=typeof window!=='undefined'?sessionStorage.getItem('calmee-calendar-cursor'):null; const date=new Date(saved||Date.now()); return Number.isNaN(date.getTime())?new Date():date; });
   const [selectedDate,setSelectedDate]=useState(new Date());
   const range=useMemo(()=>view==='month'
     ?{start:startOfWeek(startOfMonth(cursor),{weekStartsOn:1}),end:endOfWeek(endOfMonth(cursor),{weekStartsOn:1})}
     :view==='week'?{start:startOfWeek(cursor,{weekStartsOn:1}),end:endOfWeek(cursor,{weekStartsOn:1})}
     :{start:startOfDay(cursor),end:endOfDay(cursor)},[cursor,view]);
+  checkCalendarRevision();
   const initialRangeData=calendarRangeCache.get(calendarRangeKey(range.start,range.end));
   const [calendars,setCalendars]=useState<CalendarCollection[]>(()=>initialRangeData?.calendars||[]);
   const [events,setEvents]=useState<CalendarEvent[]>(()=>initialRangeData?.events||[]);
@@ -86,10 +101,13 @@ export default function CalendarPage(){
   const [editor,setEditor]=useState<EditorState|null>(null);
   const [editorAnchor,setEditorAnchor]=useState<EditorAnchor|null>(null);
   const [saving,setSaving]=useState(false);
+  const [linkMeeting,setLinkMeeting]=useState<{id:string;title:string;meetingStartTime?:string;calendarEventId?:string}|null>(null);
   const [pendingMeetingDeletes,setPendingMeetingDeletes]=useState<string[]>([]);
   const [deletingMeetings,setDeletingMeetings]=useState(false);
   const [selectedMeetingIds,setSelectedMeetingIds]=useState<Set<string>>(new Set());
   const calendarScrollRef=useRef<HTMLDivElement|null>(null);
+  const loadGate=useRef(new RequestGate());
+  useEffect(()=>{sessionStorage.setItem('calmee-calendar-cursor',cursor.toISOString());},[cursor]);
 
   const visibleCalendarIds=useMemo(()=>new Set(calendars.filter(item=>item.enabled).map(item=>item.id)),[calendars]);
   const visibleEvents=useMemo(()=>events.filter(event=>event.calendarId?visibleCalendarIds.has(event.calendarId):true),[events,visibleCalendarIds]);
@@ -118,8 +136,8 @@ export default function CalendarPage(){
     return()=>window.cancelAnimationFrame(frame);
   },[view]);
 
-  const load=async(force=false)=>{try{const data=await fetchCalendarRange(range.start,range.end,force);setCalendars(data.calendars);setEvents(data.events);}catch(error){showError(t('calendar.loadFailed'),error);}};
-  useEffect(()=>{void load();},[range.start.getTime(),range.end.getTime()]);
+  const load=async(force=false)=>{const token=loadGate.current.next();try{const data=await fetchCalendarRange(range.start,range.end,force);if(!loadGate.current.current(token))return;setCalendars(data.calendars);setEvents(data.events);}catch(error){if(loadGate.current.current(token)&&!(error instanceof StaleResultError))showError(t('calendar.loadFailed'),error);}};
+  useEffect(()=>{void load();const off=subscribeDataChanges(['calendar'],()=>{void load();});return()=>{off();loadGate.current.next();};},[range.start.getTime(),range.end.getTime()]);
 
   const sync=async()=>{setSyncing(true);try{const result=await invoke<any>('api_sync_calendars',{startAt:range.start.toISOString(),endAt:range.end.toISOString()});await load(true);toast.success(t('calendar.syncComplete',{count:result.local+result.caldav}));if(result.warnings?.length){reportTechnicalError('calendar-sync-warnings',result.warnings);toast.warning(t('calendar.partialSync'),{description:toUserFacingError(result.warnings.join('; '),locale).message});}}catch(error){showError(t('calendar.syncFailed'),error);}finally{setSyncing(false);}};
   const toggleCalendar=async(calendar:CalendarCollection)=>{const enabled=!calendar.enabled;const update=(items:CalendarCollection[])=>items.map(item=>item.id===calendar.id?{...item,enabled}:item);setCalendars(update);Array.from(calendarRangeCache.entries()).forEach(([key,data])=>cacheCalendarRange(key,{...data,calendars:update(data.calendars)}));try{await invoke('api_set_calendar_enabled',{calendarId:calendar.id,enabled});}catch(error){const rollback=(items:CalendarCollection[])=>items.map(item=>item.id===calendar.id?{...item,enabled:calendar.enabled}:item);setCalendars(rollback);Array.from(calendarRangeCache.entries()).forEach(([key,data])=>cacheCalendarRange(key,{...data,calendars:rollback(data.calendars)}));showError(t('calendar.displaySaveFailed'),error);}};
@@ -128,7 +146,25 @@ export default function CalendarPage(){
   const closeEditor=()=>{setEditor(null);setEditorAnchor(null);};
   const openNew=(date=selectedDate,anchor?:EditorAnchor)=>{const calendar=writableCalendars[0];if(!calendar){toast.error(t('calendar.noWritable'),{description:t('calendar.noWritableHelp')});return;}const start=new Date(date);start.setHours(new Date().getHours()+1,0,0,0);const end=new Date(start.getTime()+3600000);showEditor({calendarId:calendar.id,title:'',start:localValue(start),end:localValue(end),location:'',notes:'',allDay:false,meetingId:''},anchor);};
   const openNewRange=(start:Date,end:Date,anchor:EditorAnchor)=>{const calendar=writableCalendars[0];if(!calendar){toast.error(t('calendar.noWritable'),{description:t('calendar.noWritableHelp')});return;}showEditor({calendarId:calendar.id,title:'',start:localValue(start),end:localValue(end),location:'',notes:'',allDay:false,meetingId:''},anchor);};
-  const saveEvent=async()=>{if(!editor)return;setSaving(true);try{const saved=await invoke<CalendarEvent>('api_save_calendar_event',{event:{id:editor.id||null,calendarId:editor.calendarId,title:editor.title,startAt:new Date(editor.start).toISOString(),endAt:new Date(editor.end).toISOString(),location:editor.location||null,notes:editor.notes||null,allDay:editor.allDay}});if(editor.meetingId){await invoke('api_update_meeting_schedule',{meetingId:editor.meetingId,startAt:saved.startAt,endAt:saved.endAt||null,calendarEventId:saved.id});await refetchMeetings();}closeEditor();await load(true);toast.success(editor.id?t('calendar.eventUpdated'):t('calendar.eventCreated'));}catch(error){showError(t('calendar.saveFailed'),error);}finally{setSaving(false);}};
+  const saveEvent=async()=>{if(!editor)return;setSaving(true);try{const saved=await invoke<CalendarEvent>('api_save_calendar_event',{event:{id:editor.id||null,calendarId:editor.calendarId,title:editor.title,startAt:new Date(editor.start).toISOString(),endAt:new Date(editor.end).toISOString(),location:editor.location||null,notes:editor.notes||null,allDay:editor.allDay}});closeEditor();await load(true);toast.success(editor.id?t('calendar.eventUpdated'):t('calendar.eventCreated'));}catch(error){showError(t('calendar.saveFailed'),error);}finally{setSaving(false);}};
+  const saveEventLink=async()=>{
+    if(!editor?.id||saving)return;
+    const previous=events.find(item=>item.id===editor.id)?.meetingId||'';
+    if(previous===editor.meetingId)return;
+    setSaving(true);
+    try{
+      if(editor.meetingId){
+        await invoke('api_link_meeting_calendar_event',{meetingId:editor.meetingId,eventId:editor.id,replaceExisting:Boolean(previous),expectedOccupiedMeetingId:previous||null,expectedCurrentEventId:meetings.find(item=>item.id===editor.meetingId)?.calendarEventId||'',linkMethod:'manual',syncSchedule:false});
+      }else if(previous){
+        await invoke('api_link_meeting_calendar_event',{meetingId:previous,eventId:null,replaceExisting:false,expectedOccupiedMeetingId:null,expectedCurrentEventId:editor.id,linkMethod:'manual',syncSchedule:false});
+      }
+      await Promise.all([load(true),refetchMeetings()]);
+      toast.success(locale==='zh-CN'?'关联已更新':'Calendar link updated');
+    }catch(error){
+      if(String(error).includes('CALENDAR_LINK_')){toast.warning(locale==='zh-CN'?'关联状态已变化，请刷新后重试':'The link changed. Refresh and try again.');await load(true);}
+      else showError(locale==='zh-CN'?'关联失败':'Could not update calendar link',error);
+    }finally{setSaving(false);}
+  };
   const deleteEvent=async()=>{if(!editor?.id)return;setSaving(true);try{await invoke('api_delete_calendar_event',{eventId:editor.id});closeEditor();await Promise.all([load(true),refetchMeetings()]);toast.success(t('calendar.eventDeleted'));}catch(error){showError(t('calendar.deleteFailed'),error);}finally{setSaving(false);}};
   const move=(direction:number)=>setCursor(current=>view==='month'?(direction>0?addMonths(current,1):subMonths(current,1)):view==='week'?(direction>0?addWeeks(current,1):subWeeks(current,1)):addDays(current,direction));
   const title=view==='month'?format(cursor,'LLLL yyyy',{locale:calendarLocale}):view==='week'?`${format(range.start,'PP',{locale:calendarLocale})}–${format(range.end,'PP',{locale:calendarLocale})}`:format(cursor,'PPPP',{locale:calendarLocale});
@@ -163,7 +199,7 @@ export default function CalendarPage(){
       </aside>}
       <main className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-card">
         <div ref={calendarScrollRef} className="min-h-0 flex-1 overflow-auto">
-          {view==='month'&&<div className="grid h-full min-h-[620px] grid-rows-[30px_1fr]"><div className="sticky top-0 z-10 grid grid-cols-7 border-b border-black/10 bg-[#fafafa]/95 backdrop-blur-xl">{eachDayOfInterval({start:startOfWeek(new Date(),{weekStartsOn:1}),end:endOfWeek(new Date(),{weekStartsOn:1})}).map(day=><div key={day.toISOString()} className="flex items-center justify-center text-[11px] font-medium text-slate-500">{format(day,'EEE',{locale:calendarLocale})}</div>)}</div><div className="grid grid-cols-7" style={{gridTemplateRows:`repeat(${monthRowCount},minmax(96px,1fr))`}}>{monthDays.map(day=>{const dayEvents=eventsForDay(day);const dayMeetings=meetingsForDay(day);const inMonth=isSameMonth(day,cursor);return <button key={day.toISOString()} onDoubleClick={click=>openNew(day,anchorFor(click.currentTarget))} onClick={()=>setSelectedDate(day)} className={`group min-h-0 overflow-hidden border-b border-r border-black/10 px-1.5 py-1 text-left align-top transition-colors ${!inMonth?'bg-[#fafafa]':isSameDay(day,selectedDate)?'bg-blue-50/45':'hover:bg-slate-50/70'}`}><div className="mb-0.5 flex justify-end"><span className={`flex h-[22px] min-w-[22px] items-center justify-center rounded-full px-1 text-[12px] ${isSameDay(day,new Date())?'bg-[#ff3b30] font-semibold text-white':inMonth?'text-slate-700':'text-slate-300'}`}>{format(day,'d')}</span></div><div className="space-y-px">{dayEvents.slice(0,4).map(event=><div key={event.id} onClick={click=>{click.stopPropagation();showEditor(editorFrom(event),anchorFor(click.currentTarget));}} className={`flex h-[18px] items-center gap-1 truncate rounded-[4px] px-1 text-[10.5px] leading-[18px] ${event.allDay?'text-white':'text-slate-700 hover:bg-black/[0.04]'}`} style={event.allDay?{backgroundColor:colorFor(event)}:undefined}>{!event.allDay&&<><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{backgroundColor:colorFor(event)}}/><span className="shrink-0 text-[9px] text-slate-400">{format(new Date(event.startAt),'HH:mm')}</span></>}<span className="truncate font-medium">{event.title}</span></div>)}{dayMeetings.slice(0,1).map(meeting=><div key={meeting.id} className="flex h-[18px] items-center gap-1 truncate rounded-[4px] px-1 text-[10.5px] text-violet-700 hover:bg-violet-50"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500"/><span className="truncate font-medium">{meeting.title}</span></div>)}{dayEvents.length+dayMeetings.length>5&&<div className="px-1 text-[9.5px] font-medium text-slate-400">{t('calendar.more',{count:dayEvents.length+dayMeetings.length-5})}</div>}</div></button>;})}</div></div>}
+          {view==='month'&&<div className="grid h-full min-h-[620px] grid-rows-[30px_1fr]"><div className="sticky top-0 z-10 grid grid-cols-7 border-b border-black/10 bg-[#fafafa]/95 backdrop-blur-xl">{eachDayOfInterval({start:startOfWeek(new Date(),{weekStartsOn:1}),end:endOfWeek(new Date(),{weekStartsOn:1})}).map(day=><div key={day.toISOString()} className="flex items-center justify-center text-[11px] font-medium text-slate-500">{format(day,'EEE',{locale:calendarLocale})}</div>)}</div><div className="grid grid-cols-7" style={{gridTemplateRows:`repeat(${monthRowCount},minmax(96px,1fr))`}}>{monthDays.map(day=>{const dayEvents=eventsForDay(day);const inMonth=isSameMonth(day,cursor);return <button key={day.toISOString()} onDoubleClick={click=>openNew(day,anchorFor(click.currentTarget))} onClick={()=>setSelectedDate(day)} className={`group min-h-0 overflow-hidden border-b border-r border-black/10 px-1.5 py-1 text-left align-top transition-colors ${!inMonth?'bg-[#fafafa]':isSameDay(day,selectedDate)?'bg-blue-50/45':'hover:bg-slate-50/70'}`}><div className="mb-0.5 flex justify-end"><span className={`flex h-[22px] min-w-[22px] items-center justify-center rounded-full px-1 text-[12px] ${isSameDay(day,new Date())?'bg-[#ff3b30] font-semibold text-white':inMonth?'text-slate-700':'text-slate-300'}`}>{format(day,'d')}</span></div><div className="space-y-px">{dayEvents.slice(0,4).map(event=><div key={event.id} onClick={click=>{click.stopPropagation();showEditor(editorFrom(event),anchorFor(click.currentTarget));}} className={`flex h-[18px] items-center gap-1 truncate rounded-[4px] px-1 text-[10.5px] leading-[18px] ${event.allDay?'text-white':'text-slate-700 hover:bg-black/[0.04]'}`} style={event.allDay?{backgroundColor:colorFor(event)}:undefined}>{!event.allDay&&<><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{backgroundColor:colorFor(event)}}/><span className="shrink-0 text-[9px] text-slate-400">{format(new Date(event.startAt),'HH:mm')}</span></>}<span className="truncate font-medium">{event.title}</span>{event.meetingId&&<span className="shrink-0 text-[9px] text-violet-600">{locale==='zh-CN'?'已关联':'Linked'}</span>}</div>)}{dayEvents.length>4&&<div className="px-1 text-[9.5px] font-medium text-slate-400">{t('calendar.more',{count:dayEvents.length-4})}</div>}</div></button>;})}</div></div>}
           {(view === 'week' || view === 'day') && (
             <TimeGrid
               days={view === 'day' ? [cursor] : weekDays}
@@ -179,11 +215,12 @@ export default function CalendarPage(){
       </main>
       {!inboxCollapsed&&<aside className="col-start-3 flex min-h-0 flex-col border-l border-border bg-muted/35">
         <div className="border-b border-black/10 px-4 pb-3 pt-4"><div className="flex items-center justify-between"><div><div className="text-[11px] font-medium uppercase tracking-wide text-violet-500">{t('calendar.inbox')}</div><div className="mt-0.5 text-[16px] font-semibold tracking-[-0.01em]">{t('calendar.unlinked')}</div></div><span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-violet-100 px-2 text-[11px] font-semibold text-violet-700">{unlinkedMeetings.length}</span></div><p className="mt-1.5 text-[11px] leading-4 text-slate-400">{t('calendar.inboxHelp')}</p></div>
-        <div className="flex h-9 items-center justify-between border-b border-black/[0.06] px-4"><span className="text-[11px] text-slate-400">{t('calendar.total',{count:unlinkedMeetings.length})}</span>{selectedMeetingIds.size>0&&<button onClick={()=>setPendingMeetingDeletes(Array.from(selectedMeetingIds))} className="text-[11px] font-medium text-red-500">{t('calendar.deleteSelected',{count:selectedMeetingIds.size})}</button>}</div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">{unlinkedMeetings.map(meeting=>{const displayTime=meeting.meetingStartTime||meeting.createdAt;return <div key={meeting.id} className="group mb-0.5 flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/[0.045]"><button onClick={()=>setSelectedMeetingIds(previous=>{const next=new Set(previous);next.has(meeting.id)?next.delete(meeting.id):next.add(meeting.id);return next;})} className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border ${selectedMeetingIds.has(meeting.id)?'border-violet-600 bg-violet-600':'border-slate-300 bg-white'}`}>{selectedMeetingIds.has(meeting.id)&&<Check className="h-3 w-3 text-white"/>}</button><button onClick={()=>void openMeetingWorkspace(meeting.id,url=>router.push(url),{title:meeting.title})} className="min-w-0 flex-1 text-left"><div className="truncate text-[12.5px] font-medium text-slate-700">{meeting.title}</div><div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-slate-400"><Clock3 className="h-3 w-3"/>{displayTime?format(new Date(displayTime),'yyyy-MM-dd HH:mm'):t('dashboard.timePending')}{meeting.source!=='calmee'&&<span className="ml-1 rounded bg-amber-50 px-1 py-px text-[9px] text-amber-700">{t('dashboard.externalImport')}</span>}</div></button><ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300 opacity-0 transition group-hover:opacity-100"/></div>})}{unlinkedMeetings.length===0&&<div className="p-8 text-center text-xs leading-5 text-slate-400">{t('calendar.allLinked')}</div>}</div>
+        <div className="flex h-9 items-center justify-between border-b border-black/[0.06] px-4"><span className="text-[11px] text-slate-400">{t('calendar.total',{count:unlinkedMeetings.length})}</span></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">{unlinkedMeetings.map(meeting=>{const displayTime=meeting.meetingStartTime||meeting.createdAt;return <div key={meeting.id} className="group mb-0.5 flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/[0.045]"><button onClick={()=>void openMeetingWorkspace(meeting.id,url=>router.push(url),{title:meeting.title})} className="min-w-0 flex-1 text-left"><div className="truncate text-[12.5px] font-medium text-slate-700">{meeting.title}</div><div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-slate-400"><Clock3 className="h-3 w-3"/>{displayTime?format(new Date(displayTime),'yyyy-MM-dd HH:mm'):t('dashboard.timePending')}{meeting.source!=='calmee'&&<span className="ml-1 rounded bg-amber-50 px-1 py-px text-[9px] text-amber-700">{t('dashboard.externalImport')}</span>}</div></button><ProductButton variant="ghost" onClick={()=>setLinkMeeting(meeting)}>{locale==='zh-CN'?'关联':'Link'}</ProductButton></div>})}{unlinkedMeetings.length===0&&<div className="p-8 text-center text-xs leading-5 text-slate-400">{t('calendar.allLinked')}</div>}</div>
       </aside>}
     </div>
-    {editor&&editorAnchor&&<EventEditor value={editor} anchor={editorAnchor} calendars={calendars} meetings={meetings} saving={saving} onChange={setEditor} onClose={closeEditor} onSave={()=>void saveEvent()} onDelete={editor.id&&calendars.some(item=>item.id===editor.calendarId&&!item.readOnly&&item.source==='caldav')?()=>void deleteEvent():undefined}/>}
+    <CalendarLinkDialog open={Boolean(linkMeeting)} onOpenChange={open=>{if(!open)setLinkMeeting(null);}} meetingId={linkMeeting?.id} meetingTime={linkMeeting?.meetingStartTime} currentEventId={linkMeeting?.calendarEventId} onLinked={()=>{setLinkMeeting(null);void load(true);}}/>
+    {editor&&editorAnchor&&<EventEditor linkedMeetingId={events.find(item=>item.id===editor.id)?.meetingId||''} onSaveLink={()=>void saveEventLink()} onOpenMeeting={id=>{closeEditor();void openMeetingWorkspace(id,url=>router.push(url));}} value={editor} anchor={editorAnchor} calendars={calendars} meetings={meetings} saving={saving} onChange={setEditor} onClose={closeEditor} onSave={()=>void saveEvent()} onDelete={editor.id&&calendars.some(item=>item.id===editor.calendarId&&!item.readOnly&&item.source==='caldav')?()=>void deleteEvent():undefined}/>}
   </div>;
 }
 
@@ -206,8 +243,31 @@ function TimeGrid({days,events,colorFor,onSelectDate,onOpenEvent,onCreate,onCrea
   </div>;
 }
 
-function EventEditor({value,anchor,calendars,meetings,saving,onChange,onClose,onSave,onDelete}:{value:EditorState;anchor:EditorAnchor;calendars:CalendarCollection[];meetings:any[];saving:boolean;onChange:(value:EditorState)=>void;onClose:()=>void;onSave:()=>void;onDelete?:()=>void}){
-  const {t}=useLanguage();
-  const selected=calendars.find(calendar=>calendar.id===value.calendarId);const canEdit=Boolean(selected&&!selected.readOnly&&selected.source==='caldav');const choices=value.id?calendars:calendars.filter(calendar=>!calendar.readOnly&&calendar.source==='caldav');
-  return <Dialog open onOpenChange={(open)=>!open&&onClose()}><DialogContent className="flex max-h-[calc(100vh-40px)] max-w-[440px] flex-col gap-0 overflow-hidden p-0"><DialogHeader className="border-b border-border/70 px-5 pb-4 pt-5"><DialogTitle>{value.id?(canEdit?t('calendar.editEvent'):t('calendar.viewEvent')):t('calendar.newEvent')}</DialogTitle><DialogDescription>{canEdit?t('calendar.linkMeeting'):t('calendar.readOnlyHelp')}</DialogDescription></DialogHeader><div className="min-h-0 space-y-3 overflow-y-auto px-5 py-4">{!canEdit&&value.id&&<div className="rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">{t('calendar.readOnlyHelp')}</div>}<ProductInput autoFocus className="w-full font-medium" disabled={!canEdit} placeholder={t('calendar.eventTitle')} value={value.title} onChange={e=>onChange({...value,title:e.target.value})}/><ProductSelect className="w-full" disabled={Boolean(value.id)} value={value.calendarId} onChange={e=>onChange({...value,calendarId:e.target.value})}>{choices.map(calendar=><option key={calendar.id} value={calendar.id}>{calendar.accountKey} — {calendar.name}{calendar.readOnly?` (${t('common.readOnly')})`:''}</option>)}</ProductSelect><label className="flex items-center justify-between rounded-lg bg-muted/45 px-3 py-2 text-[13px]"><span>{t('calendar.allDay')}</span><input type="checkbox" disabled={!canEdit} checked={value.allDay} onChange={e=>onChange({...value,allDay:e.target.checked})}/></label><div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">{t('calendar.start')}<ProductInput type="datetime-local" disabled={!canEdit} className="mt-1 w-full" value={value.start} onChange={e=>onChange({...value,start:e.target.value})}/></label><label className="text-xs text-muted-foreground">{t('calendar.end')}<ProductInput type="datetime-local" disabled={!canEdit} className="mt-1 w-full" value={value.end} onChange={e=>onChange({...value,end:e.target.value})}/></label></div><div className="relative"><MapPin className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"/><ProductInput className="w-full pl-9" disabled={!canEdit} placeholder={t('calendar.location')} value={value.location} onChange={e=>onChange({...value,location:e.target.value})}/></div><textarea className="min-h-20 w-full resize-y rounded-lg border border-input bg-card px-3 py-2 text-[13px] outline-none transition placeholder:text-muted-foreground/75 focus:border-primary/70 focus:ring-2 focus:ring-primary/15 disabled:bg-muted/45 disabled:opacity-60" disabled={!canEdit} placeholder={t('calendar.notes')} value={value.notes} onChange={e=>onChange({...value,notes:e.target.value})}/><label className="block text-xs text-muted-foreground">{t('calendar.linkMeeting')}<ProductSelect className="mt-1 w-full" disabled={!canEdit} value={value.meetingId} onChange={e=>onChange({...value,meetingId:e.target.value})}><option value="">{t('calendar.noLink')}</option>{meetings.map(meeting=><option key={meeting.id} value={meeting.id}>{meeting.title}</option>)}</ProductSelect></label></div><DialogFooter className="mx-5 mb-4 items-center sm:justify-between">{onDelete?<ProductButton variant="ghost" className="text-destructive hover:text-destructive" onClick={onDelete} disabled={saving}><Trash2 className="h-3.5 w-3.5"/>{t('common.delete')}</ProductButton>:<span/>}<div className="flex gap-2"><ProductButton onClick={onClose}>{canEdit?t('common.cancel'):t('calendar.close')}</ProductButton>{canEdit&&<ProductButton variant="primary" onClick={onSave} disabled={saving||!value.title.trim()||!value.calendarId}>{saving&&<Loader2 className="h-3.5 w-3.5 animate-spin"/>}{t('calendar.save')}</ProductButton>}</div></DialogFooter></DialogContent></Dialog>;
+function EventEditor({value,calendars,meetings,saving,onChange,onClose,onSave,onDelete,linkedMeetingId,onSaveLink,onOpenMeeting}:{value:EditorState;anchor:EditorAnchor;calendars:CalendarCollection[];meetings:any[];saving:boolean;onChange:(value:EditorState)=>void;onClose:()=>void;onSave:()=>void;onDelete?:()=>void;linkedMeetingId:string;onSaveLink:()=>void;onOpenMeeting:(id:string)=>void}){
+  const {t,locale}=useLanguage();const zh=locale==='zh-CN';
+  const selected=calendars.find(calendar=>calendar.id===value.calendarId);
+  const canEdit=Boolean(selected&&!selected.readOnly&&selected.source==='caldav');
+  const choices=value.id?calendars:calendars.filter(calendar=>!calendar.readOnly&&calendar.source==='caldav');
+  const targetEvent=meetings.find(meeting=>meeting.id===value.meetingId)?.calendarEventId;
+  const movingTarget=Boolean(targetEvent&&targetEvent!==value.id);
+  const transferring=Boolean((linkedMeetingId&&value.meetingId&&linkedMeetingId!==value.meetingId)||movingTarget);
+  return <Dialog open onOpenChange={(open)=>!open&&!saving&&onClose()}><DialogContent className="flex max-h-[calc(100vh-40px)] max-w-[440px] flex-col gap-0 overflow-hidden p-0">
+    <DialogHeader className="border-b border-border/70 px-5 pb-4 pt-5"><DialogTitle>{value.id?(canEdit?t('calendar.editEvent'):t('calendar.viewEvent')):t('calendar.newEvent')}</DialogTitle><DialogDescription>{zh?'日程内容来自日历；会议关联仅保存在 CalMee。':'Calendar content belongs to the source calendar. Meeting links are stored only in CalMee.'}</DialogDescription></DialogHeader>
+    <div className="min-h-0 space-y-3 overflow-y-auto px-5 py-4">
+      <ProductInput autoFocus className="w-full font-medium" disabled={!canEdit} placeholder={t('calendar.eventTitle')} value={value.title} onChange={e=>onChange({...value,title:e.target.value})}/>
+      <ProductSelect className="w-full" disabled={Boolean(value.id)} value={value.calendarId} onChange={e=>onChange({...value,calendarId:e.target.value})}>{choices.map(calendar=><option key={calendar.id} value={calendar.id}>{calendar.accountKey} — {calendar.name}{calendar.readOnly?` (${t('common.readOnly')})`:''}</option>)}</ProductSelect>
+      <label className="flex items-center justify-between rounded-lg bg-muted/45 px-3 py-2 text-[13px]"><span>{t('calendar.allDay')}</span><input type="checkbox" disabled={!canEdit} checked={value.allDay} onChange={e=>onChange({...value,allDay:e.target.checked})}/></label>
+      <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">{t('calendar.start')}<ProductInput type="datetime-local" disabled={!canEdit} className="mt-1 w-full" value={value.start} onChange={e=>onChange({...value,start:e.target.value})}/></label><label className="text-xs text-muted-foreground">{t('calendar.end')}<ProductInput type="datetime-local" disabled={!canEdit} className="mt-1 w-full" value={value.end} onChange={e=>onChange({...value,end:e.target.value})}/></label></div>
+      <ProductInput className="w-full" disabled={!canEdit} placeholder={t('calendar.location')} value={value.location} onChange={e=>onChange({...value,location:e.target.value})}/>
+      <textarea className="min-h-20 w-full resize-y rounded-lg border border-input bg-card px-3 py-2 text-[13px]" disabled={!canEdit} placeholder={t('calendar.notes')} value={value.notes} onChange={e=>onChange({...value,notes:e.target.value})}/>
+      {value.id&&<section className="space-y-2 border-t border-border pt-3">
+        <div className="flex items-center justify-between text-xs font-medium"><span>{t('calendar.linkMeeting')}</span>{linkedMeetingId&&<ProductButton variant="ghost" onClick={()=>onOpenMeeting(linkedMeetingId)}>{zh?'打开会议':'Open meeting'}</ProductButton>}</div>
+        <ProductSelect className="w-full" disabled={saving} value={value.meetingId} onChange={e=>onChange({...value,meetingId:e.target.value})}><option value="">{t('calendar.noLink')}</option>{meetings.map(meeting=><option key={meeting.id} value={meeting.id}>{meeting.title}</option>)}</ProductSelect>
+        {transferring&&<p className="text-xs text-amber-700">{zh?'确认后将解除原会议的关联，原会议内容会保留。':'Transfer removes the previous link but keeps the original meeting content.'}</p>}
+        {movingTarget&&<p className="text-xs text-amber-700">{zh?'所选会议已关联另一个日程；确认后将改为当前日程。':'The selected meeting is linked to another event; confirmation moves it to this event.'}</p>}
+        <ProductButton disabled={saving||value.meetingId===linkedMeetingId} onClick={onSaveLink}>{transferring?(zh?'确认转移关联':'Confirm transfer'):value.meetingId?(zh?'保存关联':'Save link'):(zh?'解除关联':'Remove link')}</ProductButton>
+      </section>}
+    </div>
+    <DialogFooter className="mx-5 mb-4 items-center sm:justify-between">{onDelete?<ProductButton variant="ghost" className="text-destructive" onClick={onDelete} disabled={saving}><Trash2 className="h-3.5 w-3.5"/>{t('common.delete')}</ProductButton>:<span/>}<div className="flex gap-2"><ProductButton onClick={onClose} disabled={saving}>{t('calendar.close')}</ProductButton>{canEdit&&<ProductButton variant="primary" onClick={onSave} disabled={saving||!value.title.trim()||!value.calendarId}>{saving&&<Loader2 className="h-3.5 w-3.5 animate-spin"/>}{zh?'保存日程内容':'Save event content'}</ProductButton>}</div></DialogFooter>
+  </DialogContent></Dialog>;
 }

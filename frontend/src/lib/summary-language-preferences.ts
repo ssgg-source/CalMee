@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { normaliseLanguageCode } from '@/lib/summary-languages';
 
 export const SUMMARY_LANGUAGE_RECENTS_KEY = 'summaryLanguageRecents';

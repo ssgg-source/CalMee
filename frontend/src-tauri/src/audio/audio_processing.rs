@@ -80,7 +80,12 @@ pub fn create_meeting_folder(
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M").to_string();
     let sanitized_name = sanitize_filename(meeting_name);
     let folder_name = format!("{}_{}", sanitized_name, timestamp);
-    let meeting_folder = base_path.join(folder_name);
+    let mut meeting_folder = base_path.join(&folder_name);
+    let mut suffix = 2;
+    while meeting_folder.exists() {
+        meeting_folder = base_path.join(format!("{}_{}", folder_name, suffix));
+        suffix += 1;
+    }
 
     // Create main meeting folder
     std::fs::create_dir_all(&meeting_folder)?;

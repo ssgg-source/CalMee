@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { listen } from '@tauri-apps/api/event';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -35,12 +35,14 @@ interface BuiltInModelManagerProps {
   selectedModel: string;
   onModelSelect: (model: string) => void;
   layout?: 'inline' | 'dialog';
+  family?: 'qwen' | 'gemma';
 }
 
 export function BuiltInModelManager({
   selectedModel,
   onModelSelect,
   layout = 'inline',
+  family,
 }: BuiltInModelManagerProps) {
   const { locale, t } = useLanguage();
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -58,7 +60,7 @@ export function BuiltInModelManager({
 
       // Auto-select first available model if none selected
       if (data.length > 0 && !selectedModel) {
-        const firstAvailable = data.find((m) => m.status.type === 'available');
+        const firstAvailable = data.find((m) => (!family || m.name.toLowerCase().includes(family)) && m.status.type === 'available');
         if (firstAvailable) {
           onModelSelect(firstAvailable.name);
         }
@@ -74,7 +76,12 @@ export function BuiltInModelManager({
 
   useEffect(() => {
     fetchModels();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [family]);
+
+  const visibleModels = family
+    ? models.filter(model => model.name.toLowerCase().includes(family) || model.display_name.toLowerCase().includes(family))
+    : models;
 
   // Listen for download progress events
   useEffect(() => {
@@ -269,7 +276,7 @@ export function BuiltInModelManager({
   }
 
   // Only show "no models" message after fetch has completed
-  if (hasFetched && models.length === 0) {
+  if (hasFetched && visibleModels.length === 0) {
     return (
       <Alert>
         <AlertDescription>
@@ -282,7 +289,7 @@ export function BuiltInModelManager({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <h4 className="text-sm font-semibold text-foreground">{family ? `${family === 'qwen' ? 'Qwen' : 'Gemma'} ${locale === 'zh-CN' ? '本地模型' : 'local models'}` : (locale === 'zh-CN' ? '内置本地模型' : 'Built-in local models')}</h4>
       </div>
 
       <div
@@ -291,7 +298,7 @@ export function BuiltInModelManager({
           layout === 'dialog' && 'max-h-[50vh] overflow-y-auto pr-2 pb-2'
         )}
       >
-        {models.map((model) => {
+        {visibleModels.map((model) => {
           const progress = downloadProgress[model.name];
           const progressInfo = downloadProgressInfo[model.name];
           const modelIsDownloading = downloadingModels.has(model.name);

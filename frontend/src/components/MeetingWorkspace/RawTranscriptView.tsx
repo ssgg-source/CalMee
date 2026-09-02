@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { listen } from "@tauri-apps/api/event";
 import {
   AudioLines,
@@ -33,6 +33,9 @@ import {
 import { useLanguage } from "@/contexts/LanguageContext";
 import { ProgressIconButton } from "./ProgressIconButton";
 import { reportTechnicalError, toUserFacingError } from "@/lib/feedback";
+import { subscribeDataChanges } from '@/lib/data-events';
+import { queueResourceWrite } from '@/lib/refresh-state';
+import { readViewState, writeViewState, captureReadingPosition, restoreReadingPosition, type ReadingPosition } from '@/lib/view-state';
 
 type Person = { id: string; name: string };
 type SpeakerOverride = { transcriptId: string; personId: string; personName: string };
@@ -186,6 +189,8 @@ export const RawTranscriptView = forwardRef<
 ) {
   const { locale } = useLanguage();
   const zh = locale === "zh-CN";
+  const viewKey = `raw:${meetingId}`;
+  const remembered = useRef(readViewState<{ version: 'original'|'clustered'|'optimized'; filter: string; position?: ReadingPosition }>(viewKey));
   const liveRows = useMemo(
     () =>
       segments ||
@@ -198,13 +203,14 @@ export const RawTranscriptView = forwardRef<
       })),
     [segments, transcripts],
   );
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => readViewState<Record<string, string>>(`raw-drafts:${meetingId}`) || {});
   const [optimizedDrafts, setOptimizedDrafts] = useState<
     Record<string, string>
-  >({});
+  >(() => readViewState<Record<string, string>>(`optimized-drafts:${meetingId}`) || {});
+  useEffect(() => { writeViewState(`raw-drafts:${meetingId}`, drafts); writeViewState(`optimized-drafts:${meetingId}`, optimizedDrafts); }, [meetingId, drafts, optimizedDrafts]);
   const [version, setVersion] = useState<
     "original" | "clustered" | "optimized"
-  >("clustered");
+  >(remembered.current?.version || "clustered");
   const [refinement, setRefinement] = useState<RefinementResult | null>(null);
   const [originalVersion, setOriginalVersion] =
     useState<TranscriptVersionSnapshot | null>(null);
@@ -251,7 +257,7 @@ export const RawTranscriptView = forwardRef<
     [refinement],
   );
   const [speakerMap, setSpeakerMap] = useState<Record<string, SpeakerMeta>>({});
-  const [speakerFilter, setSpeakerFilter] = useState("all");
+  const [speakerFilter, setSpeakerFilter] = useState(remembered.current?.filter || "all");
   const [syncPlayback, setSyncPlayback] = useState(false);
   const [reclusterStatus, setReclusterStatus] =
     useState<SpeakerReclusterStatus | null>(null);
@@ -267,8 +273,29 @@ export const RawTranscriptView = forwardRef<
   const [bindingPersonId, setBindingPersonId] = useState("");
   const [speakerOverrides, setSpeakerOverrides] = useState<Record<string, SpeakerOverride>>({});
   const [newName, setNewName] = useState("");
+  const [binding, setBinding] = useState(false);
+  const speakerLoadSequence = useRef(0);
   const rowRefs = useRef<Record<string, HTMLElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const positionRef = useRef(remembered.current?.position);
+  const capturePosition = () => {
+    if (scrollContainerRef.current) positionRef.current = captureReadingPosition(scrollContainerRef.current, Object.entries(rowRefs.current));
+    return positionRef.current;
+  };
+  const restorePosition = () => {
+    const position = positionRef.current;
+    if (position && scrollContainerRef.current) restoreReadingPosition(scrollContainerRef.current, position, position.anchor ? rowRefs.current[position.anchor] : undefined);
+  };
+  useEffect(() => {
+    const element = scrollContainerRef.current;
+    const positionKey = `${viewKey}:${version}:${speakerFilter}`;
+    positionRef.current = readViewState<ReadingPosition>(positionKey) || positionRef.current;
+    const remember = () => { writeViewState(positionKey, positionRef.current); writeViewState(viewKey, { version, filter: speakerFilter, position: positionRef.current }); };
+    const savePosition = () => { capturePosition(); remember(); };
+    element?.addEventListener('scroll', savePosition, { passive: true });
+    const frame = requestAnimationFrame(restorePosition);
+    return () => { cancelAnimationFrame(frame); remember(); element?.removeEventListener('scroll', savePosition); };
+  }, [viewKey, version, speakerFilter]);
   const restoreScrollPosition = (scrollTop?: number) => {
     if (scrollTop === undefined) return;
     const restore = () => {
@@ -387,7 +414,6 @@ export const RawTranscriptView = forwardRef<
     }), listen<any>("speaker-recluster-complete", (event) => {
       if (event.payload.meeting_id !== meetingId) return;
       void loadReclusterStatus();
-      void onRefetch?.();
     })]).then((values) => {
       if (disposed) values.forEach(value => value());
       else unlisteners.push(...values);
@@ -419,16 +445,23 @@ export const RawTranscriptView = forwardRef<
       { meetingId },
     );
     setRefinement(value);
-    if (value) setVersion("optimized");
+    if (value && !remembered.current) setVersion("optimized");
   };
   const reloadSpeakerOverrides = async () => {
+    const token = ++speakerLoadSequence.current;
     const items = await invoke<SpeakerOverride[]>("api_list_transcript_speaker_overrides", { meetingId });
+    if (token !== speakerLoadSequence.current) return;
+    capturePosition();
     setSpeakerOverrides(Object.fromEntries(items.map(item => [item.transcriptId, item])));
+    requestAnimationFrame(restorePosition);
   };
   useEffect(() => {
-    setDrafts({});
-    setOptimizedDrafts({});
-    setVersion("clustered");
+    const off = subscribeDataChanges([`speakers:${meetingId}`, 'people'], () => { void reloadSpeakerOverrides().catch(() => undefined); void invoke<Person[]>('api_list_people').then(setPeople).catch(() => undefined); });
+    return () => { off(); speakerLoadSequence.current++; };
+  }, [meetingId]);
+  useEffect(() => {
+    let live = true;
+    const speakerToken = ++speakerLoadSequence.current;
     Promise.all([
       invoke<Person[]>("api_list_people"),
       invoke<RefinementResult | null>("api_get_saved_transcript_refinement", {
@@ -440,6 +473,7 @@ export const RawTranscriptView = forwardRef<
       ).catch(() => null),
       invoke<SpeakerOverride[]>("api_list_transcript_speaker_overrides", { meetingId }).catch(() => []),
     ]).then(([list, ai, baseline, overrides]) => {
+      if (!live) return;
       setPeople(
         list.filter(
           (person, index, all) =>
@@ -451,10 +485,13 @@ export const RawTranscriptView = forwardRef<
         ),
       );
       setRefinement(ai);
-      if (ai) setVersion("optimized");
+      if (ai && !remembered.current) setVersion("optimized");
       setOriginalVersion(baseline);
-      setSpeakerOverrides(Object.fromEntries(overrides.map(item => [item.transcriptId, item])));
-    });
+      if (speakerToken === speakerLoadSequence.current)
+        setSpeakerOverrides(Object.fromEntries(overrides.map(item => [item.transcriptId, item])));
+      requestAnimationFrame(() => requestAnimationFrame(restorePosition));
+    }).catch(() => undefined);
+    return () => { live = false; };
   }, [meetingId]);
   useEffect(() => {
     const map: Record<string, SpeakerMeta> = {};
@@ -483,7 +520,7 @@ export const RawTranscriptView = forwardRef<
     }
     setSpeakerMap(map);
   }, [liveRows, speakerOverrides, zh]);
-  const save = async (notify = true) => {
+  const saveImpl = async (notify = true) => {
     if (version === "original") {
       if (notify) {
         toast.info(
@@ -526,16 +563,19 @@ export const RawTranscriptView = forwardRef<
       });
     }
     await Promise.all(tasks);
+    const saved = new Map(changes);
+    const keepNewerDrafts = (current: Record<string, string>) => Object.fromEntries(Object.entries(current).filter(([key, text]) => saved.get(key) !== text));
     if (version === "optimized") {
-      setOptimizedDrafts({});
+      setOptimizedDrafts(keepNewerDrafts);
       await reloadAi();
       if (notify) toast.success("AI 优化文稿已保存");
       return;
     }
-    setDrafts({});
+    setDrafts(keepNewerDrafts);
     await onRefetch?.();
     if (notify) toast.success(zh ? "聚类文稿已保存" : "Clustered transcript saved");
   };
+  const save = (notify = true) => queueResourceWrite(`raw-save:${meetingId}`, () => saveImpl(notify));
   const hasUnsavedChanges = Object.keys(
     version === "optimized" ? optimizedDrafts : drafts,
   ).length > 0;
@@ -544,7 +584,7 @@ export const RawTranscriptView = forwardRef<
   }, [hasUnsavedChanges, onDirtyChange]);
   useEffect(() => {
     if (!autoSave || !hasUnsavedChanges || version === "original") return;
-    const timer = window.setTimeout(() => { void save(false); }, 650);
+    const timer = window.setTimeout(() => { void save(false).catch(error => { reportTechnicalError('transcript-auto-save', error); toast.error(zh ? '文字稿自动保存失败，草稿已保留' : 'Transcript auto-save failed. Your draft was preserved.'); }); }, 650);
     return () => window.clearTimeout(timer);
   }, [autoSave, hasUnsavedChanges, drafts, optimizedDrafts, version]);
   const copy = async () => {
@@ -617,6 +657,7 @@ export const RawTranscriptView = forwardRef<
   const assign = async (id: string, person: Person) => {
     const meta = speakerMap[id];
     if (!meta) return;
+    const previousKey = effectiveSpeakerKey(id);
     if (meta.localSpeaker)
       await invoke("api_assign_meeting_speaker", {
         meetingId,
@@ -625,8 +666,9 @@ export const RawTranscriptView = forwardRef<
         rememberVoice: true,
       });
     else
-      await invoke("api_assign_meeting_record_block_person", {
-        blockId: meta.blockId,
+      await invoke("api_set_transcript_speaker_overrides", {
+        meetingId,
+        transcriptIds: [id],
         personId: person.id,
       });
     setSpeakerMap((current) =>
@@ -640,6 +682,8 @@ export const RawTranscriptView = forwardRef<
         ]),
       ),
     );
+    await reloadSpeakerOverrides();
+    if (speakerFilter === previousKey) setSpeakerFilter(person.id);
     setEditing(null);
   };
   const create = async (id: string) => {
@@ -665,32 +709,38 @@ export const RawTranscriptView = forwardRef<
     return person;
   };
   const bindDisplayedSpeech = async (transcriptIds: string[]) => {
+    if (binding) return;
+    setBinding(true);
     try {
+      await save(false);
       const scrollTop = rememberCurrentScroll();
       const person = await resolveBindingPerson();
       if (!person) return;
       await invoke("api_set_transcript_speaker_overrides", { meetingId, transcriptIds, personId: person.id });
       await reloadSpeakerOverrides();
       setEditing(null);
-      restoreScrollPosition(scrollTop);
+      requestAnimationFrame(restorePosition);
       toast.success(zh ? "已单条绑定当前讲话" : "Current speech bound");
     } catch (error) {
       reportTechnicalError("speaker-bind-one", error);
       toast.error(zh ? "单条绑定失败" : "Single binding failed", { description: toUserFacingError(error, locale).message });
-    }
+    } finally { setBinding(false); }
   };
   const bindSpeakerBatch = async (rowId: string) => {
+    if (binding) return;
+    setBinding(true);
     try {
+      await save(false);
       const scrollTop = rememberCurrentScroll();
       const person = await resolveBindingPerson();
       if (!person) return;
       await assign(rowId, person);
-      restoreScrollPosition(scrollTop);
+      requestAnimationFrame(restorePosition);
       toast.success(zh ? "已批量绑定该说话人的全部讲话" : "All speeches from this speaker were bound");
     } catch (error) {
       reportTechnicalError("speaker-bind-all", error);
       toast.error(zh ? "批量绑定失败" : "Batch binding failed", { description: toUserFacingError(error, locale).message });
-    }
+    } finally { setBinding(false); }
   };
   const recluster = async () => {
     if (reclustering || !reclusterStatus?.available) return;

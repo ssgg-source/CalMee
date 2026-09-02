@@ -5,7 +5,7 @@
  * Pure 1-to-1 wrapper - no error handling changes, exact same behavior as direct invoke/listen calls.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { TranscriptUpdate, Transcript } from '@/types';
 

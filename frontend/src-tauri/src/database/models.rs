@@ -16,6 +16,20 @@ pub struct MeetingModel {
     pub external_id: Option<String>,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct MeetingListModel {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
+    pub meeting_start_time: Option<String>,
+    pub meeting_end_time: Option<String>,
+    pub calendar_event_id: Option<String>,
+    pub source: String,
+    pub has_audio: bool,
+    pub has_notes: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(transparent)]
 pub struct DateTimeUtc(pub DateTime<Utc>);

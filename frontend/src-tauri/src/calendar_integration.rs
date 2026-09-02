@@ -110,6 +110,7 @@ pub struct DedaoImportResult {
     pub imported: usize,
     pub skipped: usize,
     pub failed: usize,
+    pub processed_note_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -576,29 +577,32 @@ pub async fn api_update_meeting_schedule<R: Runtime>(
     end_at: Option<String>,
     calendar_event_id: Option<String>,
 ) -> Result<(), String> {
-    let mut tx = state
-        .db_manager
-        .pool()
-        .begin()
-        .await
-        .map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE meetings SET meeting_start_time=?,meeting_end_time=?,calendar_event_id=?,updated_at=? WHERE id=?")
-        .bind(&start_at).bind(&end_at).bind(&calendar_event_id).bind(Utc::now()).bind(&meeting_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE calendar_events SET meeting_id=NULL WHERE meeting_id=?")
-        .bind(&meeting_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(event_id) = &calendar_event_id {
-        sqlx::query("UPDATE calendar_events SET meeting_id=? WHERE id=?")
-            .bind(&meeting_id)
-            .bind(event_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?;
+    // Compatibility argument only: changing meeting time must never silently
+    // create, remove or overwrite a calendar association.
+    let _ = calendar_event_id;
+    if let Some(start) = start_at.as_ref() {
+        let start =
+            DateTime::parse_from_rfc3339(start).map_err(|_| "Invalid meeting start time")?;
+        if let Some(end) = end_at.as_ref() {
+            let end = DateTime::parse_from_rfc3339(end).map_err(|_| "Invalid meeting end time")?;
+            if end < start {
+                return Err("Meeting end time must not precede its start".into());
+            }
+        }
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
+    let result = sqlx::query(
+        "UPDATE meetings SET meeting_start_time=?,meeting_end_time=?,updated_at=? WHERE id=?",
+    )
+    .bind(&start_at)
+    .bind(&end_at)
+    .bind(Utc::now().to_rfc3339())
+    .bind(&meeting_id)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|e| e.to_string())?;
+    if result.rows_affected() == 0 {
+        return Err("Meeting not found".into());
+    }
     Ok(())
 }
 
@@ -1026,6 +1030,7 @@ pub async fn api_import_dedao_notes<R: Runtime>(
         imported: 0,
         skipped: 0,
         failed: 0,
+        processed_note_ids: Vec::new(),
     };
     for note_id in note_ids {
         let outcome = async {
@@ -1064,8 +1069,14 @@ pub async fn api_import_dedao_notes<R: Runtime>(
         }
         .await;
         match outcome {
-            Ok((_, true)) => result.skipped += 1,
-            Ok((_, false)) => result.imported += 1,
+            Ok((_, skipped)) => {
+                if skipped {
+                    result.skipped += 1;
+                } else {
+                    result.imported += 1;
+                }
+                result.processed_note_ids.push(note_id);
+            }
             Err(error) => {
                 result.failed += 1;
                 log::warn!("Dedao note import failed: {}", error);
@@ -1485,16 +1496,18 @@ async fn sync_caldav(
                 .map(|value| !server_hrefs.contains(value))
                 .unwrap_or(false)
             {
+                let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
                 sqlx::query("UPDATE meetings SET calendar_event_id=NULL WHERE calendar_event_id=?")
                     .bind(&id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|e| e.to_string())?;
                 sqlx::query("DELETE FROM calendar_events WHERE id=?")
                     .bind(id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|e| e.to_string())?;
+                tx.commit().await.map_err(|e| e.to_string())?;
             }
         }
     }

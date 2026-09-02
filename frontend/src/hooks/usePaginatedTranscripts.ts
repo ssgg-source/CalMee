@@ -1,221 +1,101 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Transcript, MeetingMetadata, PaginatedTranscriptsResponse, TranscriptSegmentData } from "@/types";
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { invoke } from '@/lib/data-invoke';
+import { subscribeDataChanges } from '@/lib/data-events';
+import { RequestGate } from '@/lib/refresh-state';
+import type { Transcript, MeetingMetadata, PaginatedTranscriptsResponse } from '@/types';
 
-// Keep the first paint light for long meetings. Remaining local rows are loaded
-// shortly after the workspace becomes interactive.
-const DEFAULT_PAGE_SIZE = 250;
+const PAGE_SIZE = 250;
+type Snapshot = { metadata: MeetingMetadata | null; transcripts: Transcript[]; totalCount: number; hasMore: boolean };
+const snapshots = new Map<string, Snapshot>();
+const empty = (): Snapshot => ({ metadata: null, transcripts: [], totalCount: 0, hasMore: false });
 
-interface UsePaginatedTranscriptsProps {
-    meetingId: string | null;
-    /** Optional initial timestamp (in seconds) from URL for loading the correct page */
-    initialTimestamp?: number;
-}
+export function usePaginatedTranscripts({ meetingId }: { meetingId: string | null; initialTimestamp?: number }) {
+  const [snapshot, setSnapshot] = useState<Snapshot>(() => snapshots.get(meetingId || '') || empty());
+  const [isLoading, setIsLoading] = useState(!snapshot.metadata);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const current = useRef(snapshot);
+  const activeId = useRef(meetingId);
+  activeId.current = meetingId;
+  const gate = useRef(new RequestGate());
+  const metadataGate = useRef(new RequestGate());
+  const loadingMore = useRef(false);
+  const refreshing = useRef(false);
+  const publish = useCallback((value: Snapshot) => {
+    current.current = value;
+    setSnapshot(value);
+    if (meetingId) {
+      snapshots.delete(meetingId);
+      snapshots.set(meetingId, value);
+      if (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value!);
+    }
+  }, [meetingId]);
 
-interface UsePaginatedTranscriptsReturn {
-    metadata: MeetingMetadata | null;
-    segments: TranscriptSegmentData[];
-    transcripts: Transcript[];
-    isLoading: boolean;
-    isLoadingMore: boolean;
-    hasMore: boolean;
-    totalCount: number;
-    loadedCount: number;
-    error: string | null;
+  const refreshMetadata = useCallback(async () => {
+    if (!meetingId) return;
+    const token = metadataGate.current.next();
+    try {
+      const metadata = await invoke<MeetingMetadata>('api_get_meeting_metadata', { meetingId });
+      if (activeId.current === meetingId && metadataGate.current.current(token)) publish({ ...current.current, metadata });
+    } catch { /* Background failure must not erase the last successful snapshot. */ }
+  }, [meetingId, publish]);
 
-    // Actions
-    loadMore: () => Promise<void>;
-    reset: () => void;
-    refetch: () => Promise<void>;
-}
+  const refetch = useCallback(async () => {
+    if (!meetingId) return;
+    const token = gate.current.next();
+    const metaToken = metadataGate.current.next();
+    const valid = () => activeId.current === meetingId && gate.current.current(token);
+    const size = Math.max(PAGE_SIZE, current.current.transcripts.length);
+    refreshing.current = true;
+    loadingMore.current = false;
+    setIsLoadingMore(false);
+    setIsLoading(!current.current.metadata);
+    try {
+      const [metadata, first] = await Promise.all([
+        invoke<MeetingMetadata>('api_get_meeting_metadata', { meetingId }),
+        invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', { meetingId, limit: PAGE_SIZE, offset: 0 }),
+      ]);
+      let response = first;
+      const transcripts = [...first.transcripts];
+      while (valid() && response.has_more && transcripts.length < size) {
+        response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', { meetingId, limit: PAGE_SIZE, offset: transcripts.length });
+        if (!response.transcripts.length) break;
+        transcripts.push(...response.transcripts);
+      }
+      if (!valid()) return;
+      publish({ metadata: metadataGate.current.current(metaToken) ? metadata : current.current.metadata, transcripts, totalCount: response.total_count, hasMore: response.has_more });
+      setError(null);
+    } catch {
+      if (valid()) setError('Failed to refresh meeting data');
+    } finally {
+      if (valid()) { setIsLoading(false); refreshing.current = false; }
+    }
+  }, [meetingId, publish]);
 
-/**
- * Convert Transcript array to TranscriptSegmentData for virtualized display
- */
-function convertTranscriptsToSegments(transcripts: Transcript[]): TranscriptSegmentData[] {
-    return transcripts.map(t => ({
-        id: t.id,
-        timestamp: t.audio_start_time ?? 0,
-        endTime: t.audio_end_time,
-        text: t.text,
-        confidence: t.confidence,
-    }));
-}
+  const loadMore = useCallback(async () => {
+    if (!meetingId || loadingMore.current || refreshing.current || !current.current.hasMore) return;
+    const token = gate.current.next();
+    loadingMore.current = true;
+    setIsLoadingMore(true);
+    try {
+      const response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', { meetingId, limit: PAGE_SIZE, offset: current.current.transcripts.length });
+      if (activeId.current !== meetingId || !gate.current.current(token)) return;
+      const transcripts = [...new Map([...current.current.transcripts, ...response.transcripts].map(row => [row.id, row])).values()];
+      publish({ ...current.current, transcripts, totalCount: response.total_count, hasMore: response.has_more && response.transcripts.length > 0 });
+    } catch { if (activeId.current === meetingId && gate.current.current(token)) setError('Failed to load more transcripts'); }
+    finally { if (activeId.current === meetingId && gate.current.current(token)) { loadingMore.current = false; setIsLoadingMore(false); } }
+  }, [meetingId, publish]);
 
-export function usePaginatedTranscripts({
-    meetingId,
-    initialTimestamp,
-}: UsePaginatedTranscriptsProps): UsePaginatedTranscriptsReturn {
-    const [metadata, setMetadata] = useState<MeetingMetadata | null>(null);
-    const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-    const [totalCount, setTotalCount] = useState(0);
-    const [isLoading, setIsLoading] = useState(true);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [hasMore, setHasMore] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+  const reset = useCallback(() => { gate.current.next(); metadataGate.current.next(); publish(empty()); }, [publish]);
+  useEffect(() => {
+    publish(snapshots.get(meetingId || '') || empty());
+    void refetch();
+    return () => { gate.current.next(); metadataGate.current.next(); };
+  }, [meetingId, publish, refetch]);
+  useEffect(() => subscribeDataChanges([`transcripts:${meetingId}`], () => { void refetch(); }), [meetingId, refetch]);
+  useEffect(() => subscribeDataChanges([`meeting:${meetingId}`], () => { void refreshMetadata(); }), [meetingId, refreshMetadata]);
+  useEffect(() => subscribeDataChanges([`deleted:${meetingId}`], () => { if (meetingId) snapshots.delete(meetingId); reset(); setIsLoading(false); setError('This meeting has been deleted'); }), [meetingId, reset]);
 
-    const offsetRef = useRef(0);
-    const loadedMeetingIdRef = useRef<string | null>(null);
-    const isLoadingRef = useRef(false);
-    const lastLoadTimeRef = useRef(0); // Debounce protection
-
-    // Reset state when meeting changes
-    const reset = useCallback(() => {
-        setMetadata(null);
-        setTranscripts([]);
-        setTotalCount(0);
-        setIsLoading(true);
-        setIsLoadingMore(false);
-        setHasMore(false);
-        setError(null);
-        offsetRef.current = 0;
-    }, []);
-
-    // Load meeting metadata
-    const loadMetadata = useCallback(async (): Promise<MeetingMetadata | null> => {
-        if (!meetingId) return null;
-
-        try {
-            const data = await invoke<MeetingMetadata>('api_get_meeting_metadata', {
-                meetingId,
-            });
-            setMetadata(data);
-            return data;
-        } catch (err) {
-            console.error('Failed to load meeting metadata:', err);
-            setError('Failed to load meeting details');
-            return null;
-        }
-    }, [meetingId]);
-
-    // Load transcripts at specific offset
-    const loadTranscriptsAtOffset = useCallback(async (
-        offset: number,
-        append: boolean = true
-    ): Promise<Transcript[]> => {
-        if (!meetingId) return [];
-
-        try {
-            const response = await invoke<PaginatedTranscriptsResponse>(
-                'api_get_meeting_transcripts',
-                {
-                    meetingId,
-                    limit: DEFAULT_PAGE_SIZE,
-                    offset,
-                }
-            );
-
-            const newTranscripts = response.transcripts;
-
-            if (append) {
-                setTranscripts(prev => {
-                    // Deduplicate by id
-                    const existingIds = new Set(prev.map(t => t.id));
-                    const uniqueNew = newTranscripts.filter(t => !existingIds.has(t.id));
-                    // Sort by audio_start_time
-                    return [...prev, ...uniqueNew].sort((a, b) =>
-                        (a.audio_start_time ?? 0) - (b.audio_start_time ?? 0)
-                    );
-                });
-            } else {
-                setTranscripts(newTranscripts);
-            }
-
-            setHasMore(response.has_more);
-            setTotalCount(response.total_count);
-            offsetRef.current = offset + newTranscripts.length;
-
-            return newTranscripts;
-        } catch (err) {
-            console.error('Failed to load transcripts:', err);
-            setError('Failed to load transcripts');
-            return [];
-        }
-    }, [meetingId]);
-
-    // Load next page with debounce protection
-    const loadMore = useCallback(async () => {
-        const now = Date.now();
-        // Debounce: require at least 100ms between calls
-        if (now - lastLoadTimeRef.current < 100) {
-            return;
-        }
-
-        if (isLoadingRef.current || !hasMore || !meetingId || isLoading) return;
-
-        lastLoadTimeRef.current = now;
-        isLoadingRef.current = true;
-        setIsLoadingMore(true);
-        try {
-            await loadTranscriptsAtOffset(offsetRef.current, true);
-        } finally {
-            setIsLoadingMore(false);
-            isLoadingRef.current = false;
-        }
-    }, [hasMore, meetingId, loadTranscriptsAtOffset, isLoading]);
-
-    // Force refetch of data (e.g., after retranscription)
-    const refetch = useCallback(async () => {
-        if (!meetingId) return;
-
-        reset();
-        setIsLoading(true);
-        try {
-            await Promise.all([
-                loadMetadata(),
-                loadTranscriptsAtOffset(0, false),
-            ]);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
-
-    // Initial load
-    useEffect(() => {
-        if (!meetingId) {
-            reset();
-            return;
-        }
-
-        // Avoid reloading the same meeting
-        if (loadedMeetingIdRef.current === meetingId) return;
-        loadedMeetingIdRef.current = meetingId;
-
-        reset();
-
-        const loadInitial = async () => {
-            setIsLoading(true);
-            try {
-                await Promise.all([
-                    loadMetadata(),
-                    loadTranscriptsAtOffset(0, false),
-                ]);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        loadInitial();
-    }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
-
-    // Convert to segments (memoized)
-    const segments = useMemo(() =>
-        convertTranscriptsToSegments(transcripts),
-        [transcripts]
-    );
-
-    return {
-        metadata,
-        segments,
-        transcripts,
-        isLoading,
-        isLoadingMore,
-        hasMore,
-        totalCount,
-        loadedCount: transcripts.length,
-        error,
-        loadMore,
-        reset,
-        refetch,
-    };
+  const segments = useMemo(() => snapshot.transcripts.map(t => ({ id: t.id, timestamp: t.audio_start_time ?? 0, endTime: t.audio_end_time, text: t.text, confidence: t.confidence })), [snapshot.transcripts]);
+  return { ...snapshot, segments, loadedCount: snapshot.transcripts.length, isLoading, isLoadingMore, error, loadMore, reset, refetch, refreshMetadata };
 }

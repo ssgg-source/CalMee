@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { ProductSelect } from '@/components/ui/ProductControls';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { readViewState, writeViewState } from '@/lib/view-state';
 
 export interface AudioPlayerRef { seekTo: (seconds: number) => void; chooseFile: () => Promise<void>; }
 type AudioFileInfo = { path: string; filename: string; duration_seconds: number };
@@ -55,7 +56,8 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [rate, setRate] = useState(1);
+  const [rate, setRate] = useState(() => readViewState<number>(`audio-rate:${meetingId}`) || 1);
+  useEffect(() => { writeViewState(`audio-rate:${meetingId}`, rate); }, [meetingId, rate]);
   const [volume, setVolume] = useState(() => {
     if (typeof window === 'undefined') return 1;
     const raw = window.localStorage.getItem('calmee.player.volume');
@@ -203,7 +205,7 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(function
   };
 
   return <div className="flex w-full min-w-0 max-w-2xl items-center justify-center gap-2 px-2">
-    {sourceUrl && <audio key={sourceUrl} ref={audioRef} src={sourceUrl} preload="metadata" playsInline onLoadStart={()=>setLoading(true)} onCanPlay={()=>{setLoading(false);setLoadFailed(false);}} onCanPlayThrough={()=>{setLoading(false);setLoadFailed(false);}} onPlaying={()=>{setLoading(false);setLoadFailed(false);setPlaying(true);}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={event=>{setPlaying(false);setCurrent(event.currentTarget.duration||0);onTimeChange?.(event.currentTarget.duration||0);}} onLoadedMetadata={event=>{setDuration(event.currentTarget.duration);event.currentTarget.playbackRate=rate;event.currentTarget.volume=volume;}} onSeeking={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onSeeked={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onError={event=>{setLoading(false);setPlaying(false);setLoadFailed(true);reportMediaDiagnostic('media-element-error',event.currentTarget);const detail=event.currentTarget.error?.message||(zh?'不支持此音频格式或文件无法访问':'Unsupported audio format or inaccessible file');toast.error(zh?'音频载入失败':'Could not load audio',{description:detail});}} onTimeUpdate={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} />}
+    {sourceUrl && <audio key={sourceUrl} ref={audioRef} src={sourceUrl} preload="metadata" playsInline onLoadStart={()=>setLoading(true)} onCanPlay={()=>{setLoading(false);setLoadFailed(false);}} onCanPlayThrough={()=>{setLoading(false);setLoadFailed(false);}} onPlaying={()=>{setLoading(false);setLoadFailed(false);setPlaying(true);}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={event=>{setPlaying(false);setCurrent(event.currentTarget.duration||0);onTimeChange?.(event.currentTarget.duration||0);}} onLoadedMetadata={event=>{const restored=readViewState<number>(`audio-position:${meetingId}:${path}`);if(restored!==undefined&&Number.isFinite(event.currentTarget.duration)){event.currentTarget.currentTime=Math.min(restored,event.currentTarget.duration);setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}setDuration(event.currentTarget.duration);event.currentTarget.playbackRate=rate;event.currentTarget.volume=volume;}} onSeeking={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onSeeked={event=>{setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} onError={event=>{setLoading(false);setPlaying(false);setLoadFailed(true);reportMediaDiagnostic('media-element-error',event.currentTarget);const detail=event.currentTarget.error?.message||(zh?'不支持此音频格式或文件无法访问':'Unsupported audio format or inaccessible file');toast.error(zh?'音频载入失败':'Could not load audio',{description:detail});}} onTimeUpdate={event=>{if(path)writeViewState(`audio-position:${meetingId}:${path}`,event.currentTarget.currentTime);setCurrent(event.currentTarget.currentTime);onTimeChange?.(event.currentTarget.currentTime);}} />}
     {loadFailed && <Button variant="ghost" size="sm" className="h-8 shrink-0 text-[11px] text-amber-700" disabled={repairing} onClick={()=>void repairLegacyAudio()}>{repairing?(zh?'修复中…':'Repairing…'):(zh?'修复旧录音':'Repair old audio')}</Button>}
     <Button variant="ghost" size="icon" className="relative h-8 w-8" disabled={!path} onClick={()=>jump(-15)} title="后退 15 秒"><RotateCcw className="!h-[18px] !w-[18px]" /><span className="pointer-events-none absolute inset-0 flex items-center justify-center pt-px text-[7px] font-bold">15</span></Button>
     <Button variant="outline" size="icon" className="h-9 w-9 rounded-full border-violet-200 text-violet-700" disabled={!path && loading} onClick={()=>void togglePlayback()} title={path ? (playing?'暂停':'播放') : '选择音频'}>{playing?<Pause className="h-4 w-4"/>:<Play className="ml-0.5 h-4 w-4"/>}</Button>

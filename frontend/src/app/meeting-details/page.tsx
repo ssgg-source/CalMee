@@ -5,7 +5,7 @@ import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
@@ -55,6 +55,7 @@ function MeetingDetailsContent() {
     loadedCount,
     loadMore,
     refetch,
+    refreshMetadata,
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || '' });
 
@@ -143,7 +144,6 @@ function MeetingDetailsContent() {
     }
 
     if (metadata) {
-      console.log('Meeting metadata loaded:', metadata);
 
       // Build meeting details from metadata and paginated transcripts
       setMeetingDetails({
@@ -166,11 +166,12 @@ function MeetingDetailsContent() {
 
   // Handle transcript loading errors
   useEffect(() => {
-    if (transcriptError) {
+    if (transcriptError && !metadata) {
       console.error('Error loading transcripts:', transcriptError);
       setError(transcriptError);
     }
-  }, [transcriptError]);
+    else setError(null);
+  }, [transcriptError, metadata]);
 
   // Extract fetchMeetingDetails for use in child components (now refetches via hook)
   const fetchMeetingDetails = useCallback(async () => {
@@ -178,10 +179,8 @@ function MeetingDetailsContent() {
       return;
     }
 
-    // The usePaginatedTranscripts hook automatically refetches when meetingId changes
-    // This function is kept for compatibility with onMeetingUpdated callback
-    console.log('fetchMeetingDetails called - pagination hook will handle refetch');
-  }, [meetingId]);
+    await refreshMetadata();
+  }, [meetingId, refreshMetadata]);
 
   // Reset states when meetingId changes (prevent race conditions)
   useEffect(() => {
@@ -214,8 +213,7 @@ function MeetingDetailsContent() {
     const fetchMeetingSummary = async () => {
       try {
         const summary = await getMeetingSummary(meetingId);
-
-        console.log('FETCH SUMMARY: Raw response:', summary);
+        if (!live) return;
 
         // Check if the summary request failed with 404 or error status, or if no summary exists yet (idle)
         // Note: 'cancelled' and 'failed' statuses can still have data if backup was restored
@@ -315,11 +313,13 @@ function MeetingDetailsContent() {
       try {
         await fetchMeetingSummary();
       } finally {
-        setIsLoading(false);
+        if (live) setIsLoading(false);
       }
     };
 
+    let live = true;
     loadData();
+    return () => { live = false; };
   }, [meetingId]);
 
   // Auto-generation check: runs when meeting is loaded with no summary
@@ -371,7 +371,9 @@ function MeetingDetailsContent() {
     </div>;
   }
 
-  return <PageContent
+  return <>
+    {transcriptError && metadata && <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">{t('meeting.refreshFailed')}</div>}
+    <PageContent
     meeting={meetingDetails}
     summaryData={meetingSummary}
     shouldAutoGenerate={shouldAutoGenerate}
@@ -390,7 +392,7 @@ function MeetingDetailsContent() {
     totalCount={totalCount}
     loadedCount={loadedCount}
     onLoadMore={loadMore}
-  />;
+  /></>;
 }
 
 export default function MeetingDetails() {
@@ -400,7 +402,12 @@ export default function MeetingDetails() {
         <LoaderIcon className="animate-spin size-6" />
       </div>
     }>
-      <MeetingDetailsContent />
+      <MeetingDetailsRoute />
     </Suspense>
   );
+}
+
+function MeetingDetailsRoute() {
+  const params = useSearchParams();
+  return <MeetingDetailsContent key={params.get('id') || ''} />;
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSidebar } from './Sidebar/SidebarProvider';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { Button } from '@/components/ui/button';
 import { useOllamaDownload } from '@/contexts/OllamaDownloadContext';
 import { BuiltInModelManager } from '@/components/BuiltInModelManager';
@@ -1004,20 +1004,10 @@ export function ModelSettingsModal({
                 <SelectValue placeholder={lt('Select provider')} />
               </SelectTrigger>
               <SelectContent className="max-h-64 overflow-y-auto">
-                <SelectItem value="builtin-ai">{lt('Built-in AI (Offline, No API needed)')}</SelectItem>
-                <SelectItem value="claude">Claude</SelectItem>
-                <SelectItem value="custom-openai">{lt('Custom Server (OpenAI)')}</SelectItem>
-                <SelectItem value="deepseek">DeepSeek ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="doubao">{lt('Doubao / Volcano Engine')} ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="gemini">Google Gemini ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="groq">Groq</SelectItem>
-                <SelectItem value="kimi">{lt('Kimi / Moonshot')} ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="minimax">MiniMax ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="qwen">{lt('Qwen / Model Studio')} ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="zhipu">{lt('Zhipu GLM')} ({t('model.cloudSuffix')})</SelectItem>
-                <SelectItem value="ollama">Ollama</SelectItem>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="openrouter">OpenRouter</SelectItem>
+                {!['builtin-ai','ollama','custom-openai'].includes(modelConfig.provider) && <SelectItem value={modelConfig.provider}>{lt('Current cloud configuration')}: {modelConfig.provider}</SelectItem>}
+                <SelectItem value="builtin-ai">{lt('Built-in local models')}</SelectItem>
+                <SelectItem value="ollama">{lt('Local models (Ollama: Qwen, Gemma and more)')}</SelectItem>
+                <SelectItem value="custom-openai">{lt('Custom cloud')}</SelectItem>
               </SelectContent>
             </Select>
 

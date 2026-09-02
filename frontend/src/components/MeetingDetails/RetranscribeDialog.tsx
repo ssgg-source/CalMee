@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { listen } from '@tauri-apps/api/event';
 import { Cpu, FileAudio, Globe2, Loader2, MessageSquareText, RefreshCw, SlidersHorizontal, UserRound, UsersRound } from 'lucide-react';
 import { toast } from 'sonner';
@@ -175,11 +175,12 @@ export function RetranscribeDialog({ open, onOpenChange, meetingId, meetingFolde
           },
         });
       }
+      if(selectedModel.profileId)await invoke('api_activate_custom_model_profile',{id:selectedModel.profileId});
       await invoke('start_retranscription_command', {
         meetingId,
         meetingFolderPath,
         language: languageValue,
-        model: selectedModel.name,
+        model: selectedModel.remoteModel || selectedModel.name,
         provider: selectedModel.provider,
         workflowMode: mode,
         globalVoiceprintMatching: mode === 'meeting' && globalVoiceprintMatching,
