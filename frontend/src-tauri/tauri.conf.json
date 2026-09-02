@@ -1,149 +1,149 @@
 {
-    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "CalMee",
-    "version": "0.1.0-alpha.3",
-    "identifier": "io.github.ssgg-source.calmee",
-    "build": {
-        "frontendDist": "../out",
-        "devUrl": "http://localhost:3119",
-        "beforeDevCommand": "pnpm dev",
-        "beforeBuildCommand": "pnpm build && node ../scripts/check-release-boundaries.mjs"
-    },
-    "app": {
-        "windows": [
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "CalMee",
+  "version": "0.1.0-alpha.4",
+  "identifier": "io.github.ssgg-source.calmee",
+  "build": {
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3119",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build && node ../scripts/check-release-boundaries.mjs"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CalMee",
+        "width": 1100,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "theme": "Light",
+        "decorations": true,
+        "dragDropEnabled": false,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay"
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "devCsp": {
+        "default-src": "'self' http://localhost:3119",
+        "script-src": "'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3119",
+        "style-src": "'self' 'unsafe-inline' http://localhost:3119",
+        "font-src": "'self' data: http://localhost:3119",
+        "img-src": "'self' asset: https://asset.localhost data: blob: http://localhost:3119",
+        "media-src": "'self' asset: https://asset.localhost blob: data: http://localhost:3119 http://127.0.0.1:*",
+        "connect-src": "'self' http://localhost:3119 ws://localhost:3119 http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
+      },
+      "csp": {
+        "default-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: https://asset.localhost data:",
+        "media-src": "'self' asset: https://asset.localhost blob: data: http://127.0.0.1:*",
+        "connect-src": "'self' http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**/*",
+          "$VIDEO/calmee-recordings/**/*"
+        ]
+      },
+      "capabilities": [
+        {
+          "identifier": "main",
+          "description": "Main window capability with file system and media access",
+          "windows": [
+            "main",
+            "meeting-*",
+            "recording-overlay"
+          ],
+          "permissions": [
+            "fs:default",
+            "fs:allow-open",
+            "fs:allow-appcache-write-recursive",
+            "fs:allow-read-file",
+            "fs:read-all",
+            "fs:write-all",
+            "fs:allow-app-read",
+            "fs:allow-app-write",
+            "fs:allow-download-write",
+            "fs:allow-download-read",
+            "fs:scope-download",
+            "core:path:default",
+            "core:event:default",
+            "core:window:default",
+            "core:webview:allow-create-webview-window",
+            "core:webview:allow-get-all-webviews",
+            "core:window:allow-close",
+            "core:window:allow-center",
+            "core:window:allow-unminimize",
+            "core:window:allow-show",
+            "core:window:allow-set-focus",
+            "core:app:default",
+            "core:resources:default",
+            "core:menu:default",
+            "core:tray:default",
+            "core:window:allow-set-title",
+            "core:window:allow-primary-monitor",
+            "core:window:allow-set-size",
+            "core:window:allow-set-min-size",
+            "core:window:allow-set-resizable",
+            "core:window:allow-set-position",
+            "core:window:allow-set-always-on-top",
+            "core:window:allow-set-visible-on-all-workspaces",
+            "core:window:allow-start-dragging",
+            "core:window:allow-start-resize-dragging",
+            "core:window:allow-hide",
+            "store:default",
+            "notification:default",
+            "notification:allow-is-permission-granted",
+            "process:default",
             {
-                "title": "CalMee",
-                "width": 1100,
-                "height": 700,
-                "resizable": true,
-                "fullscreen": false,
-                "theme": "Light",
-                "decorations": true,
-                "dragDropEnabled": false,
-                "hiddenTitle": true,
-                "titleBarStyle": "Overlay"
-            }
-        ],
-        "macOSPrivateApi": true,
-        "security": {
-            "devCsp": {
-                "default-src": "'self' http://localhost:3119",
-                "script-src": "'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3119",
-                "style-src": "'self' 'unsafe-inline' http://localhost:3119",
-                "font-src": "'self' data: http://localhost:3119",
-                "img-src": "'self' asset: https://asset.localhost data: blob: http://localhost:3119",
-                "media-src": "'self' asset: https://asset.localhost blob: data: http://localhost:3119 http://127.0.0.1:*",
-                "connect-src": "'self' http://localhost:3119 ws://localhost:3119 http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
-            },
-            "csp": {
-                "default-src": "'self'",
-                "style-src": "'self' 'unsafe-inline'",
-                "img-src": "'self' asset: https://asset.localhost data:",
-                "media-src": "'self' asset: https://asset.localhost blob: data: http://127.0.0.1:*",
-                "connect-src": "'self' http://localhost:11434 http://localhost:8178 https://api.ollama.ai"
-            },
-            "assetProtocol": {
-                "enable": true,
-                "scope": [
-                    "$APPDATA/**/*",
-                    "$VIDEO/calmee-recordings/**/*"
-                ]
-            },
-            "capabilities": [
+              "identifier": "fs:scope",
+              "allow": [
                 {
-                    "identifier": "main",
-                    "description": "Main window capability with file system and media access",
-                    "windows": [
-                        "main",
-                        "meeting-*",
-                        "recording-overlay"
-                    ],
-                    "permissions": [
-                        "fs:default",
-                        "fs:allow-open",
-                        "fs:allow-appcache-write-recursive",
-                        "fs:allow-read-file",
-                        "fs:read-all",
-                        "fs:write-all",
-                        "fs:allow-app-read",
-                        "fs:allow-app-write",
-                        "fs:allow-download-write",
-                        "fs:allow-download-read",
-                        "fs:scope-download",
-                        "core:path:default",
-                        "core:event:default",
-                        "core:window:default",
-                        "core:webview:allow-create-webview-window",
-                        "core:webview:allow-get-all-webviews",
-                        "core:window:allow-close",
-                        "core:window:allow-center",
-                        "core:window:allow-unminimize",
-                        "core:window:allow-show",
-                        "core:window:allow-set-focus",
-                        "core:app:default",
-                        "core:resources:default",
-                        "core:menu:default",
-                        "core:tray:default",
-                        "core:window:allow-set-title",
-                        "core:window:allow-primary-monitor",
-                        "core:window:allow-set-size",
-                        "core:window:allow-set-min-size",
-                        "core:window:allow-set-resizable",
-                        "core:window:allow-set-position",
-                        "core:window:allow-set-always-on-top",
-                        "core:window:allow-set-visible-on-all-workspaces",
-                        "core:window:allow-start-dragging",
-                        "core:window:allow-start-resize-dragging",
-                        "core:window:allow-hide",
-                        "store:default",
-                        "notification:default",
-                        "notification:allow-is-permission-granted",
-                        "process:default",
-                        {
-                            "identifier": "fs:scope",
-                            "allow": [
-                                {
-                                    "path": "$APPDATA/*"
-                                }
-                            ]
-                        }
-                    ]
+                  "path": "$APPDATA/*"
                 }
-            ]
+              ]
+            }
+          ]
         }
-    },
-    "bundle": {
-        "active": true,
-        "targets": [
-            "deb",
-            "appimage",
-            "msi",
-            "nsis",
-            "app",
-            "dmg"
-        ],
-        "createUpdaterArtifacts": false,
-        "icon": [
-            "icons/icon.png",
-            "icons/app_icon.icns",
-            "icons/app_icon.ico"
-        ],
-        "resources": {
-            "templates": "templates",
-            "../../funasr_sidecar": "funasr_sidecar",
-            "../../scripts/generate-python-runtime-notices.py": "funasr_sidecar/tools/generate-python-runtime-notices.py"
-        },
-        "externalBin": [
-            "binaries/llama-helper",
-            "binaries/ffmpeg"
-        ],
-        "macOS": {
-            "entitlements": "entitlements.plist",
-            "signingIdentity": "-",
-            "hardenedRuntime": true
-        },
-        "windows": {
-            "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
-        }
+      ]
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage",
+      "msi",
+      "nsis",
+      "app",
+      "dmg"
+    ],
+    "createUpdaterArtifacts": false,
+    "icon": [
+      "icons/icon.png",
+      "icons/app_icon.icns",
+      "icons/app_icon.ico"
+    ],
+    "resources": {
+      "templates": "templates",
+      "../../funasr_sidecar": "funasr_sidecar",
+      "../../scripts/generate-python-runtime-notices.py": "funasr_sidecar/tools/generate-python-runtime-notices.py"
+    },
+    "externalBin": [
+      "binaries/llama-helper",
+      "binaries/ffmpeg"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "signingIdentity": "-",
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
+    }
+  }
 }

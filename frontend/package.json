@@ -1,6 +1,6 @@
 {
     "name": "calmee",
-    "version": "0.1.0-alpha.3",
+    "version": "0.1.0-alpha.4",
     "private": true,
     "description": "Open-source local-first meeting transcription and notes app",
     "license": "MIT",
@@ -35,6 +35,8 @@
         "lint": "next lint",
         "version:check": "node scripts/version.mjs --check",
         "feedback:check": "node scripts/check-feedback-boundaries.mjs",
+        "test:dedao": "node --test scripts/test-dedao-notes.mjs",
+        "test:refresh": "node --test scripts/test-refresh-consistency.mjs",
         "version:set": "node scripts/version.mjs"
     },
     "dependencies": {

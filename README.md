@@ -14,8 +14,9 @@ calendar event it belongs to.
 CalMee is one full-featured open-source application. There is no separate Pro
 edition, feature gate, trial period, or license activation path.
 
-> **Status:** pre-release. The repository is being prepared for its first public
-> alpha. Do not rely on the current build as the only copy of an important recording.
+> **Status:** alpha pre-release. See [releases](https://github.com/ssgg-source/CalMee/releases)
+> for availability and platform limitations. Do not rely on the current build as
+> the only copy of an important recording.
 
 ## What makes CalMee different
 
