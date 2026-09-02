@@ -61,7 +61,7 @@ export function getStatusLabel(status: BuiltInModelStatus): string {
 }
 
 // Tauri command wrappers for Built-in AI backend
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 
 export class BuiltInAIAPI {
   static async listModels(): Promise<BuiltInModelInfo[]> {

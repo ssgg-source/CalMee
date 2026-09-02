@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { ArrowLeft, AudioLines, CalendarDays, ChevronRight, FileText, Loader2, Save, Sparkles, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/contexts/LanguageContext";

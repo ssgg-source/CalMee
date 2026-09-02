@@ -56,21 +56,26 @@ export function ProductPageContent({ children, className }: React.HTMLAttributes
 export function SettingsSection({
   title,
   description,
+  actions,
   children,
   className,
 }: React.HTMLAttributes<HTMLElement> & {
   title?: React.ReactNode;
   description?: React.ReactNode;
+  actions?: React.ReactNode;
 }) {
   return (
     <section className={cn("calmee-panel overflow-hidden", className)}>
       {(title || description) && (
-        <div className="border-b border-border/70 px-5 py-4">
-          {title && <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>}
-          {description && <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{description}</p>}
+        <div className={cn("flex items-center justify-between gap-6 px-5 py-4", children != null && "border-b border-border/70")}>
+          <div className="min-w-0">
+            {title && <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>}
+            {description && <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{description}</p>}
+          </div>
+          {actions && <div className="shrink-0">{actions}</div>}
         </div>
       )}
-      <div className="p-5">{children}</div>
+      {children != null && <div className="p-5">{children}</div>}
     </section>
   );
 }

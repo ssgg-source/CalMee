@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import type { OnboardingPermissions, PermissionStatus } from '@/types/onboarding';
 
 type StoredOnboardingStatus = {

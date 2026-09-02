@@ -1,5 +1,5 @@
 use crate::api::{MeetingDetails, MeetingTranscript};
-use crate::database::models::{MeetingModel, Transcript};
+use crate::database::models::{MeetingListModel, MeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use tracing::{error, info};
@@ -7,11 +7,23 @@ use tracing::{error, info};
 pub struct MeetingsRepository;
 
 impl MeetingsRepository {
-    pub async fn get_meetings(pool: &SqlitePool) -> Result<Vec<MeetingModel>, sqlx::Error> {
-        let meetings =
-            sqlx::query_as::<_, MeetingModel>("SELECT * FROM meetings ORDER BY created_at DESC")
-                .fetch_all(pool)
-                .await?;
+    pub async fn get_meetings(pool: &SqlitePool) -> Result<Vec<MeetingListModel>, sqlx::Error> {
+        let meetings = sqlx::query_as::<_, MeetingListModel>(
+            "SELECT m.id, m.title, m.created_at, m.updated_at,
+                    m.meeting_start_time, m.meeting_end_time,
+                    m.calendar_event_id, m.source,
+                    CASE WHEN COALESCE(TRIM(m.folder_path), '') <> '' THEN 1 ELSE 0 END AS has_audio,
+                    EXISTS(
+                        SELECT 1 FROM meeting_notes n
+                        WHERE n.meeting_id = m.id
+                          AND COALESCE(TRIM(n.notes_markdown), '') <> ''
+                    ) AS has_notes
+             FROM meetings m
+             WHERE m.source <> 'calmee-draft'
+             ORDER BY m.created_at DESC",
+        )
+        .fetch_all(pool)
+        .await?;
         Ok(meetings)
     }
 
@@ -184,7 +196,7 @@ impl MeetingsRepository {
         let now = Utc::now().naive_utc();
 
         let rows_affected =
-            sqlx::query("UPDATE meetings SET title = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE meetings SET title = ?, updated_at = ?, source=CASE WHEN source='calmee-draft' THEN 'calmee' ELSE source END WHERE id = ?")
                 .bind(new_title)
                 .bind(now)
                 .bind(meeting_id)

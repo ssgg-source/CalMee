@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { Cpu, Loader2, Radio } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useLanguage } from "@/contexts/LanguageContext";

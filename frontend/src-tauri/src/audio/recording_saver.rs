@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::audio_processing::create_meeting_folder;
-use super::incremental_saver::IncrementalAudioSaver;
+use super::incremental_saver::{canonical_audio_file_name, IncrementalAudioSaver};
 use super::recording_state::AudioChunk;
 
 /// Structured transcript segment for JSON export
@@ -48,6 +48,7 @@ pub struct DeviceInfo {
 
 /// New recording saver using incremental saving strategy
 pub struct RecordingSaver {
+    base_folder: PathBuf,
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
     meeting_folder: Option<PathBuf>,
     meeting_name: Option<String>,
@@ -59,6 +60,7 @@ pub struct RecordingSaver {
 impl RecordingSaver {
     pub fn new() -> Self {
         Self {
+            base_folder: super::recording_preferences::get_default_recordings_folder(),
             incremental_saver: None,
             meeting_folder: None,
             meeting_name: None,
@@ -66,6 +68,10 @@ impl RecordingSaver {
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             accumulation_task: None,
         }
+    }
+
+    pub fn set_base_folder(&mut self, path: PathBuf) {
+        self.base_folder = path;
     }
 
     /// Set the meeting name for this recording session
@@ -238,10 +244,9 @@ impl RecordingSaver {
         create_checkpoints: bool,
     ) -> Result<()> {
         // Load preferences to get base recordings folder
-        let base_folder = super::recording_preferences::get_default_recordings_folder();
-
         // Create meeting folder structure (with or without .checkpoints/ subdirectory)
-        let meeting_folder = create_meeting_folder(&base_folder, meeting_name, create_checkpoints)?;
+        let meeting_folder =
+            create_meeting_folder(&self.base_folder, meeting_name, create_checkpoints)?;
 
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
@@ -268,7 +273,7 @@ impl RecordingSaver {
                 system_audio: None,
             },
             audio_file: if create_checkpoints {
-                "audio.m4a".to_string()
+                canonical_audio_file_name(&meeting_folder)
             } else {
                 "".to_string()
             },

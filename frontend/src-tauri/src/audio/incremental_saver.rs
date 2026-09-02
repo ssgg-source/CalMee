@@ -7,8 +7,33 @@ use std::path::{Path, PathBuf};
 
 use super::ffmpeg::find_ffmpeg_path;
 
-const CANONICAL_AUDIO_FILE: &str = "audio.m4a";
 const SEGMENTS_DIRECTORY: &str = "audio-segments";
+
+pub fn canonical_audio_file_name(meeting_folder: &Path) -> String {
+    let folder_name = meeting_folder
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let timestamp = folder_name
+        .as_bytes()
+        .windows(16)
+        .rev()
+        .find_map(|window| {
+            let value = std::str::from_utf8(window).ok()?;
+            let valid = value
+                .chars()
+                .enumerate()
+                .all(|(index, character)| match index {
+                    4 | 7 => character == '-',
+                    10 => character == '_',
+                    13 => character == '-',
+                    _ => character.is_ascii_digit(),
+                });
+            valid.then_some(value)
+        })
+        .unwrap_or("recording");
+    format!("{timestamp}.m4a")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,7 +130,7 @@ fn write_audio_manifest(meeting_folder: &Path) -> Result<()> {
 
     let manifest = AudioManifest {
         version: 1,
-        canonical_audio: CANONICAL_AUDIO_FILE.to_string(),
+        canonical_audio: canonical_audio_file_name(meeting_folder),
         container: "m4a".to_string(),
         codec: "aac".to_string(),
         segments: segments
@@ -265,7 +290,9 @@ impl IncrementalAudioSaver {
         }
 
         // Merge all checkpoints using FFmpeg concat
-        let final_audio_path = self.meeting_folder.join(CANONICAL_AUDIO_FILE);
+        let final_audio_path = self
+            .meeting_folder
+            .join(canonical_audio_file_name(&self.meeting_folder));
         let staged_audio_path = self.meeting_folder.join(".audio-finalizing.m4a");
         let _ = std::fs::remove_file(&staged_audio_path);
         self.merge_checkpoints(&staged_audio_path).await?;
@@ -487,7 +514,7 @@ pub async fn recover_audio_from_checkpoints(
         .map_err(|e| format!("Failed to write concat file: {}", e))?;
 
     // Run FFmpeg to merge chunks
-    let output_path = folder_path.join(CANONICAL_AUDIO_FILE);
+    let output_path = folder_path.join(canonical_audio_file_name(&folder_path));
     let staged_output_path = folder_path.join(".audio-recovery.m4a");
     let _ = std::fs::remove_file(&staged_output_path);
     let staged_output_path_str = staged_output_path
@@ -645,6 +672,14 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn canonical_audio_name_uses_the_recording_timestamp() {
+        assert_eq!(
+            canonical_audio_file_name(Path::new("/tmp/Weekly_sync_2026-09-02_14-35")),
+            "2026-09-02_14-35.m4a"
+        );
+    }
+
     #[tokio::test]
     async fn test_checkpoint_creation() {
         // Create temp meeting folder
@@ -674,7 +709,7 @@ mod tests {
         // Finalize and verify merge
         let final_path = saver.finalize().await.unwrap();
         assert!(final_path.exists());
-        assert_eq!(final_path.file_name().unwrap(), "audio.m4a");
+        assert_eq!(final_path.file_name().unwrap(), "recording.m4a");
 
         // Verify recoverable source segments and their manifest are retained.
         assert!(!meeting_folder.join(".checkpoints").exists());
@@ -688,7 +723,7 @@ mod tests {
             &std::fs::read(meeting_folder.join("audio-manifest.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(manifest.canonical_audio, "audio.m4a");
+        assert_eq!(manifest.canonical_audio, "recording.m4a");
         assert_eq!(manifest.segments.len(), 2);
     }
 

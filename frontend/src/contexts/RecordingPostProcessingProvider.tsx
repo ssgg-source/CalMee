@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 
 /**

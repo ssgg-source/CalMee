@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { CalendarDays, CheckCircle2, Cloud, Loader2, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";

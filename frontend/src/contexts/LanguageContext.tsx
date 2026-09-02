@@ -46,7 +46,9 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   // Safe React-level fallback for inherited UI that still uses literal English
   // labels. Unlike the removed DOM bridge, this never mutates rendered nodes.
   const lt = useCallback((text: string, variables?: Record<string, string | number>) => {
-    const translated = locale === 'zh-CN' ? (legacyZhCN[text] ?? text) : text;
+    const translated = locale === 'zh-CN'
+      ? ((zhCN as Record<string, string>)[text] ?? legacyZhCN[text] ?? text)
+      : text;
     return Object.entries(variables ?? {}).reduce(
       (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
       translated,

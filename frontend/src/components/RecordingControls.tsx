@@ -1,6 +1,6 @@
 'use client';
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { Play, Pause, Square, Mic, AlertCircle, X } from 'lucide-react';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
@@ -16,13 +16,14 @@ import {
 } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
-import { clearLiveMeetingNotes, persistLiveMeetingNotes, readLiveMeetingNotes } from '@/lib/live-meeting-notes';
+import { clearLiveMeetingNotes, hasMeaningfulLiveMeetingNotes, persistLiveMeetingNotes, readLiveMeetingNotes } from '@/lib/live-meeting-notes';
 import { indexedDBService } from '@/services/indexedDBService';
 import { storageService } from '@/services/storageService';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { attachRecordingCalendar, readRecordingCalendarSelection, selectRecordingCalendar } from '@/lib/recording-calendar';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -306,17 +307,21 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         });
       }
 
-      if (keepNotes && readLiveMeetingNotes().markdown.trim()) {
+      if (keepNotes && hasMeaningfulLiveMeetingNotes(readLiveMeetingNotes().markdown)) {
+        const calendarSelection=readRecordingCalendarSelection();
         const response = await storageService.saveMeeting(
           meetingName?.trim() || (zh ? '会中笔记' : 'Meeting notes'),
           [],
           null,
         );
         await persistLiveMeetingNotes(response.meeting_id);
+        try { await attachRecordingCalendar(response.meeting_id,calendarSelection); }
+        catch { toast.warning(zh?'笔记已保存，但日程尚未关联；可在会议中重试':'Notes saved, but calendar linking failed. Retry from the meeting.'); }
         await onNotesOnlySaved?.(response.meeting_id);
         toast.success(zh ? '录音已删除，笔记已保留' : 'Recording deleted, notes kept');
       } else {
         clearLiveMeetingNotes();
+        selectRecordingCalendar(null);
         toast.success(zh ? '录音和笔记已放弃' : 'Recording and notes discarded');
       }
       [

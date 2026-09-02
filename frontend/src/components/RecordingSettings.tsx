@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
-import { FolderOpen } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { FolderCog, FolderOpen } from 'lucide-react';
+import { invoke } from '@/lib/data-invoke';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
@@ -110,6 +110,21 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     }
   };
 
+  const handleChooseFolder = async () => {
+    try {
+      const selected = await invoke<string | null>('select_recording_folder');
+      if (!selected) return;
+      const next = { ...preferences, save_folder: selected };
+      setPreferences(next);
+      await savePreferences(next);
+    } catch (error) {
+      reportTechnicalError('recording-folder-select', error);
+      toast.error(zh ? '无法更改录音保存位置' : 'Could not change the recording location', {
+        description: toUserFacingError(error, locale).message,
+      });
+    }
+  };
+
   const handleNotificationToggle = async (enabled: boolean) => {
     try {
       setShowRecordingNotification(enabled);
@@ -133,12 +148,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       await invoke('set_recording_preferences', { preferences: prefs });
       onSave?.(prefs);
 
-      // Show success toast with device details
-      const micDevice = prefs.preferred_mic_device || lt('Default');
-      const systemDevice = prefs.preferred_system_device || lt('Default');
-      toast.success(lt('Device preferences saved'), {
-        description: lt('Microphone: {microphone}, System Audio: {systemAudio}', { microphone: micDevice, systemAudio: systemDevice })
-      });
+      toast.success(lt('Preference saved'));
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
       toast.error(lt('Failed to save device preferences'), {
@@ -185,13 +195,14 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
               <div className="mb-3 break-all text-sm text-muted-foreground">
                 {preferences.save_folder || lt('Default folder')}
               </div>
-              <ProductButton size="sm" onClick={handleOpenFolder}>
-                <FolderOpen className="h-4 w-4" />
-                {lt('Open Folder')}
-              </ProductButton>
-              <div className="mt-3 rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-                <strong className="text-foreground">{zh ? '录音格式：' : 'Recording format:'}</strong> M4A（AAC）
-                <div>{zh ? '每段录音会独立保留，并生成可直接播放的 audio.m4a。' : 'Each segment is preserved and a seekable audio.m4a is generated for playback.'}</div>
+              <div className="flex flex-wrap gap-2">
+                <ProductButton size="sm" onClick={() => void handleChooseFolder()}><FolderCog className="h-4 w-4" />{zh ? '更改位置' : 'Change location'}</ProductButton>
+                <ProductButton size="sm" onClick={handleOpenFolder}><FolderOpen className="h-4 w-4" />{lt('Open Folder')}</ProductButton>
+              </div>
+              <div className="mt-3 grid gap-1 rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+                <div><strong className="text-foreground">{zh ? '目录命名：' : 'Folder name:'}</strong>{zh ? '会议标题_YYYY-MM-DD_HH-MM' : 'Meeting title_YYYY-MM-DD_HH-MM'}</div>
+                <div><strong className="text-foreground">{zh ? '录音文件：' : 'Audio file:'}</strong>YYYY-MM-DD_HH-MM.m4a (AAC)</div>
+                <div>{zh ? '录音中断或接续时，各段会先独立保留，结束后合成为可拖动播放的 M4A。' : 'Interrupted and continued segments are kept separately first, then finalized into a seekable M4A.'}</div>
               </div>
             </div>
           ) : (

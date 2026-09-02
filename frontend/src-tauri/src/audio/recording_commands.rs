@@ -145,7 +145,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name) =
+    let (auto_save, preferred_mic_name, preferred_system_name, save_folder) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
                 info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
@@ -154,6 +154,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     prefs.auto_save,
                     prefs.preferred_mic_device,
                     prefs.preferred_system_device,
+                    prefs.save_folder,
                 )
             }
             Err(e) => {
@@ -161,9 +162,15 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     "Failed to load recording preferences, using defaults: {}",
                     e
                 );
-                (true, None, None)
+                (
+                    true,
+                    None,
+                    None,
+                    super::recording_preferences::get_default_recordings_folder(),
+                )
             }
         };
+    manager.set_recording_folder(save_folder);
 
     // ============================================================================
     // MICROPHONE DEVICE RESOLUTION: Preference → Default → Error
@@ -424,22 +431,27 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
-        Ok(prefs) => {
-            info!(
-                "📋 Loaded recording preferences: auto_save={}",
-                prefs.auto_save
-            );
-            prefs.auto_save
-        }
-        Err(e) => {
-            warn!(
-                "Failed to load recording preferences, defaulting to auto_save=true: {}",
-                e
-            );
-            true // Default to saving if preferences can't be loaded
-        }
-    };
+    let (auto_save, save_folder) =
+        match super::recording_preferences::load_recording_preferences(&app).await {
+            Ok(prefs) => {
+                info!(
+                    "📋 Loaded recording preferences: auto_save={}",
+                    prefs.auto_save
+                );
+                (prefs.auto_save, prefs.save_folder)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load recording preferences, defaulting to auto_save=true: {}",
+                    e
+                );
+                (
+                    true,
+                    super::recording_preferences::get_default_recordings_folder(),
+                )
+            }
+        };
+    manager.set_recording_folder(save_folder);
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -932,9 +944,8 @@ fn resolve_discard_folder(base: &Path, folder: &Path) -> Result<PathBuf, String>
 /// Delete only the canonical direct-child folder created for the recording
 /// that has just been stopped. Historical meetings and arbitrary paths are
 /// intentionally outside this command's scope.
-pub fn discard_saved_recording_folder(folder_path: &str) -> Result<(), String> {
-    let base = super::recording_preferences::get_default_recordings_folder();
-    let folder = resolve_discard_folder(&base, Path::new(folder_path))?;
+pub fn discard_saved_recording_folder(base: &Path, folder_path: &str) -> Result<(), String> {
+    let folder = resolve_discard_folder(base, Path::new(folder_path))?;
     std::fs::remove_dir_all(folder)
         .map_err(|error| format!("Could not delete the current recording: {error}"))
 }

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Transcript, Summary } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
-import { invoke as invokeTauri } from '@tauri-apps/api/core';
+import { invoke as invokeTauri } from '@/lib/data-invoke';
 import { toast } from 'sonner';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
@@ -38,6 +38,10 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
     setAiSummary(summaryData);
   }, [summaryData]); // Only trigger when parent prop changes, not when aiSummary changes
 
+  useEffect(() => {
+    if (!isTitleDirty) setMeetingTitle(meeting.title || '+ New Call');
+  }, [meeting.id, meeting.title, isTitleDirty]);
+
   // Handlers
   const handleTitleChange = useCallback((newTitle: string) => {
     setMeetingTitle(newTitle);
@@ -59,10 +63,9 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
       setIsTitleDirty(false);
 
       // Update meetings with new title
-      const updatedMeetings = sidebarMeetings.map((m: CurrentMeeting) =>
-        m.id === meeting.id ? { id: m.id, title: meetingTitle } : m
-      );
-      setMeetings(updatedMeetings);
+      setMeetings(current => current.map((m: CurrentMeeting) =>
+        m.id === meeting.id ? { ...m, title: meetingTitle } : m
+      ));
       setCurrentMeeting({ id: meeting.id, title: meetingTitle });
       return true;
     } catch (error) {
@@ -148,10 +151,9 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
   const updateMeetingTitle = useCallback((newTitle: string) => {
     console.log('📝 Updating meeting title to:', newTitle);
     setMeetingTitle(newTitle);
-    const updatedMeetings = sidebarMeetings.map((m: CurrentMeeting) =>
-      m.id === meeting.id ? { id: m.id, title: newTitle } : m
-    );
-    setMeetings(updatedMeetings);
+    setMeetings(current => current.map((m: CurrentMeeting) =>
+      m.id === meeting.id ? { ...m, title: newTitle } : m
+    ));
     setCurrentMeeting({ id: meeting.id, title: newTitle });
   }, [meeting.id, sidebarMeetings, setMeetings, setCurrentMeeting]);
 

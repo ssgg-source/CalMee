@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MeetingRecordView, MeetingRecordViewRef } from './MeetingRecordView';
 import { FileText, ListTree, Pencil } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { toast } from 'sonner';
 import { ProductSelect } from '@/components/ui/ProductControls';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';

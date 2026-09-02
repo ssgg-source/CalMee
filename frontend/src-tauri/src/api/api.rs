@@ -1,10 +1,11 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use tauri::{AppHandle, Runtime};
 
 use crate::{
     database::{
-        models::MeetingModel,
+        models::{MeetingListModel, MeetingModel},
         repositories::{
             meeting::MeetingsRepository, setting::SettingsRepository,
             transcript::TranscriptsRepository,
@@ -24,11 +25,25 @@ pub struct Meeting {
     pub meeting_end_time: Option<String>,
     pub calendar_event_id: Option<String>,
     pub source: String,
+    pub has_audio: bool,
+    pub has_notes: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomModelProfile {
+    pub id: String,
+    pub kind: String,
+    pub protocol: String,
+    pub display_name: String,
+    pub endpoint: String,
+    pub model: String,
+    pub has_api_key: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,7 +200,7 @@ pub async fn api_get_meetings<R: Runtime>(
         auth_token.is_some()
     );
     let pool = state.db_manager.pool();
-    let meetings: Result<Vec<MeetingModel>, sqlx::Error> =
+    let meetings: Result<Vec<MeetingListModel>, sqlx::Error> =
         MeetingsRepository::get_meetings(pool).await;
 
     match meetings {
@@ -203,6 +218,8 @@ pub async fn api_get_meetings<R: Runtime>(
                     meeting_end_time: m.meeting_end_time,
                     calendar_event_id: m.calendar_event_id,
                     source: m.source,
+                    has_audio: m.has_audio,
+                    has_notes: m.has_notes,
                 })
                 .collect();
             Ok(result)
@@ -559,6 +576,373 @@ pub async fn api_get_transcript_provider_credentials<R: Runtime>(
         );
     }
     Ok(value)
+}
+
+fn validate_custom_model_profile(
+    kind: &str,
+    protocol: &str,
+    display_name: &str,
+    endpoint: &str,
+    model: &str,
+) -> Result<(), String> {
+    if !matches!(kind, "transcription" | "ai") {
+        return Err("Model kind must be transcription or ai".to_string());
+    }
+    if !matches!(protocol, "openai" | "anthropic") {
+        return Err("Protocol must be openai or anthropic".to_string());
+    }
+    if kind == "transcription" && protocol != "openai" {
+        return Err(
+            "Transcription connections currently require an OpenAI-compatible API".to_string(),
+        );
+    }
+    if display_name.trim().is_empty() || model.trim().is_empty() {
+        return Err("Name and model are required".to_string());
+    }
+    let parsed = reqwest::Url::parse(endpoint.trim())
+        .map_err(|_| "Enter a valid HTTP or HTTPS service address".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("Enter a valid HTTP or HTTPS service address".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("The service address must not contain credentials".to_string());
+    }
+    if protocol == "anthropic" && parsed.host_str() != Some("api.anthropic.com") {
+        return Err(
+            "Anthropic profiles currently support the official api.anthropic.com service"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn profile_from_row(row: &sqlx::sqlite::SqliteRow) -> CustomModelProfile {
+    CustomModelProfile {
+        id: row.get("id"),
+        kind: row.get("kind"),
+        protocol: row.get("protocol"),
+        display_name: row.get("display_name"),
+        endpoint: row.get("endpoint"),
+        model: row.get("model"),
+        has_api_key: row
+            .get::<Option<String>, _>("api_key")
+            .is_some_and(|value| !value.trim().is_empty()),
+    }
+}
+
+#[tauri::command]
+pub async fn api_list_custom_model_profiles<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    kind: String,
+) -> Result<Vec<CustomModelProfile>, String> {
+    if !matches!(kind.as_str(), "transcription" | "ai") {
+        return Err("Model kind must be transcription or ai".to_string());
+    }
+    let pool = state.db_manager.pool();
+    if kind == "transcription" {
+        if let Some(row) = sqlx::query("SELECT api_key,extra_json FROM transcript_provider_credentials WHERE provider='funasr-server'")
+            .fetch_optional(pool).await.map_err(|error| error.to_string())?
+        {
+            let value = row.get::<Option<String>, _>("extra_json")
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let model = value.get("model").and_then(|item| item.as_str()).unwrap_or_default();
+            let credentials = value.get("credentials").and_then(|item| item.as_object());
+            let endpoint = credentials.and_then(|item| item.get("endpoint")).and_then(|item| item.as_str()).unwrap_or_default();
+            if !model.is_empty() && !endpoint.is_empty() {
+                let display_name = credentials.and_then(|item| item.get("displayName")).and_then(|item| item.as_str()).unwrap_or("Imported cloud ASR");
+                sqlx::query("INSERT OR IGNORE INTO custom_model_profiles(id,kind,protocol,display_name,endpoint,api_key,model) VALUES('legacy-funasr-server','transcription','openai',?,?,?,?)")
+                    .bind(display_name).bind(endpoint).bind(row.get::<Option<String>, _>("api_key")).bind(model)
+                    .execute(pool).await.map_err(|error| error.to_string())?;
+            }
+        }
+    } else if let Some(config) = SettingsRepository::get_custom_openai_config(pool)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        sqlx::query("INSERT OR IGNORE INTO custom_model_profiles(id,kind,protocol,display_name,endpoint,api_key,model) VALUES('legacy-custom-openai','ai','openai','Imported custom model',?,?,?)")
+            .bind(config.endpoint).bind(config.api_key).bind(config.model)
+            .execute(pool).await.map_err(|error| error.to_string())?;
+    }
+    let rows = sqlx::query("SELECT id,kind,protocol,display_name,endpoint,model,api_key FROM custom_model_profiles WHERE kind=? ORDER BY updated_at DESC,display_name")
+        .bind(kind)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(rows.iter().map(profile_from_row).collect())
+}
+
+#[tauri::command]
+pub async fn api_save_custom_model_profile<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    id: Option<String>,
+    kind: String,
+    protocol: String,
+    display_name: String,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<CustomModelProfile, String> {
+    validate_custom_model_profile(&kind, &protocol, &display_name, &endpoint, &model)?;
+    let id = id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let key = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    sqlx::query("INSERT INTO custom_model_profiles(id,kind,protocol,display_name,endpoint,api_key,model,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,protocol=excluded.protocol,display_name=excluded.display_name,endpoint=excluded.endpoint,api_key=COALESCE(excluded.api_key,custom_model_profiles.api_key),model=excluded.model,updated_at=CURRENT_TIMESTAMP")
+        .bind(&id)
+        .bind(&kind)
+        .bind(&protocol)
+        .bind(display_name.trim())
+        .bind(endpoint.trim().trim_end_matches('/'))
+        .bind(key)
+        .bind(model.trim())
+        .execute(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    let row = sqlx::query("SELECT id,kind,protocol,display_name,endpoint,model,api_key FROM custom_model_profiles WHERE id=?")
+        .bind(&id)
+        .fetch_one(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(profile_from_row(&row))
+}
+
+#[tauri::command]
+pub async fn api_delete_custom_model_profile<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    kind: String,
+) -> Result<bool, String> {
+    let result = sqlx::query("DELETE FROM custom_model_profiles WHERE id=? AND kind=?")
+        .bind(id)
+        .bind(kind)
+        .execute(state.db_manager.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(result.rows_affected() == 1)
+}
+
+async fn custom_model_profile_secret(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<(String, String, String, String, String, String), String> {
+    let row = sqlx::query("SELECT kind,protocol,display_name,endpoint,model,COALESCE(api_key,'') AS api_key FROM custom_model_profiles WHERE id=?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((
+        row.get("kind"),
+        row.get("protocol"),
+        row.get("display_name"),
+        row.get("endpoint"),
+        row.get("model"),
+        row.get("api_key"),
+    ))
+}
+
+#[tauri::command]
+pub async fn api_activate_custom_model_profile<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let pool = state.db_manager.pool();
+    let (kind, protocol, display_name, endpoint, model, api_key) =
+        custom_model_profile_secret(pool, &id).await?;
+    if kind == "transcription" {
+        let credentials = serde_json::json!({"displayName":display_name,"endpoint":endpoint,"apiKey":api_key,"profileId":id});
+        sqlx::query("INSERT INTO transcript_provider_credentials(provider,api_key,extra_json,updated_at) VALUES('funasr-server',?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key,extra_json=excluded.extra_json,updated_at=CURRENT_TIMESTAMP")
+            .bind(if api_key.is_empty() { None::<String> } else { Some(api_key) })
+            .bind(serde_json::json!({"model":model,"credentials":credentials}).to_string())
+            .execute(pool).await.map_err(|error| error.to_string())?;
+        return Ok(serde_json::json!({"provider":"funasr-server","model":model}));
+    }
+    if protocol == "anthropic" {
+        if api_key.trim().is_empty() {
+            return Err("API Key is required".to_string());
+        }
+        SettingsRepository::save_api_key(pool, "claude", &api_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        SettingsRepository::save_model_config(pool, "claude", &model, "large-v3", None)
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok(serde_json::json!({"provider":"claude","model":model}));
+    }
+    let config = CustomOpenAIConfig {
+        endpoint,
+        api_key: (!api_key.is_empty()).then_some(api_key),
+        model: model.clone(),
+        max_tokens: None,
+        temperature: None,
+        top_p: None,
+    };
+    SettingsRepository::save_custom_openai_config(pool, &config)
+        .await
+        .map_err(|error| error.to_string())?;
+    SettingsRepository::save_model_config(pool, "custom-openai", &model, "large-v3", None)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"provider":"custom-openai","model":model}))
+}
+
+fn custom_models_url(endpoint: &str, protocol: &str) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(endpoint).map_err(|error| error.to_string())?;
+    let path = url.path().trim_end_matches('/');
+    let new_path = if protocol == "anthropic" {
+        "/v1/models".to_string()
+    } else if let Some(prefix) = path.strip_suffix("/audio/transcriptions") {
+        format!("{prefix}/models")
+    } else if path.ends_with("/models") {
+        path.to_string()
+    } else {
+        format!("{path}/models")
+    };
+    url.set_path(&new_path);
+    url.set_query(None);
+    Ok(url)
+}
+
+#[tauri::command]
+pub async fn api_discover_custom_profile_models<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    id: Option<String>,
+    protocol: String,
+    endpoint: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let stored_key = if let Some(profile_id) = id.as_deref() {
+        custom_model_profile_secret(state.db_manager.pool(), profile_id)
+            .await
+            .map(|value| value.5)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let key = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or(stored_key);
+    let url = custom_models_url(endpoint.trim(), &protocol)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client.get(url);
+    if protocol == "anthropic" {
+        request = request
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01");
+    } else if !key.is_empty() {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Model list request failed: {error}"))?;
+    let status = response.status();
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Model list response was invalid: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Model list request failed with HTTP {}",
+            status.as_u16()
+        ));
+    }
+    let mut models = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn api_test_custom_model_profile<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    id: Option<String>,
+    kind: String,
+    protocol: String,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    let stored_key = if let Some(profile_id) = id.as_deref() {
+        custom_model_profile_secret(state.db_manager.pool(), profile_id)
+            .await
+            .map(|value| value.5)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let key = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or(stored_key);
+    validate_custom_model_profile(&kind, &protocol, "Connection test", &endpoint, &model)?;
+    if kind == "transcription" {
+        return crate::remote_funasr::test_connection(endpoint.trim(), key.trim()).await;
+    }
+    if protocol == "anthropic" {
+        return api_test_llm_connection("claude".to_string(), key, model).await;
+    }
+    api_test_custom_openai_connection(_app, endpoint, (!key.is_empty()).then_some(key), model).await
+}
+
+#[cfg(test)]
+mod custom_model_profile_tests {
+    use super::{custom_models_url, validate_custom_model_profile};
+
+    #[test]
+    fn transcription_profiles_require_openai_compatible_protocol() {
+        assert!(validate_custom_model_profile(
+            "transcription",
+            "anthropic",
+            "Team ASR",
+            "https://api.anthropic.com",
+            "model"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn profile_service_address_rejects_embedded_credentials() {
+        assert!(validate_custom_model_profile(
+            "ai",
+            "openai",
+            "Private model",
+            "https://user:secret@example.com/v1",
+            "model"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn transcription_endpoint_maps_to_models_endpoint() {
+        let url = custom_models_url("https://example.com/v1/audio/transcriptions", "openai")
+            .expect("models URL");
+        assert_eq!(url.as_str(), "https://example.com/v1/models");
+    }
 }
 
 #[tauri::command]

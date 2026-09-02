@@ -3,8 +3,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { subscribeDataChanges } from '@/lib/data-events';
 
 
 interface SidebarItem {
@@ -23,6 +24,8 @@ export interface CurrentMeeting {
   meetingEndTime?: string;
   calendarEventId?: string;
   source?: string;
+  hasAudio?: boolean;
+  hasNotes?: boolean;
 }
 
 export interface MeetingDeletionResult {
@@ -45,7 +48,7 @@ interface SidebarContextType {
   isCollapsed: boolean;
   toggleCollapse: () => void;
   meetings: CurrentMeeting[];
-  setMeetings: (meetings: CurrentMeeting[]) => void;
+  setMeetings: React.Dispatch<React.SetStateAction<CurrentMeeting[]>>;
   isMeetingActive: boolean;
   setIsMeetingActive: (active: boolean) => void;
   handleRecordingToggle: () => void;
@@ -95,12 +98,15 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   const pathname = usePathname();
   const router = useRouter();
+  const listRequest = React.useRef(0);
+  const searchRequest = React.useRef(0);
 
   // Extract fetchMeetings as a reusable function
   const fetchMeetings = React.useCallback(async () => {
+    const request = ++listRequest.current;
     if (serverAddress) {
       try {
-        const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string, created_at?: string, updated_at?: string, meeting_start_time?: string, meeting_end_time?: string, calendar_event_id?: string, source?: string }>;
+        const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string, created_at?: string, updated_at?: string, meeting_start_time?: string, meeting_end_time?: string, calendar_event_id?: string, source?: string, has_audio?: boolean, has_notes?: boolean }>;
         const transformedMeetings = meetings.map((meeting: any) => ({
           id: meeting.id,
           title: meeting.title,
@@ -110,16 +116,27 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
           meetingEndTime: meeting.meeting_end_time,
           calendarEventId: meeting.calendar_event_id,
           source: meeting.source,
+          hasAudio: meeting.has_audio,
+          hasNotes: meeting.has_notes,
         }));
+        if (request !== listRequest.current) return;
         setMeetings(transformedMeetings);
         Analytics.trackBackendConnection(true);
       } catch (error) {
         console.error('Error fetching meetings:', error);
-        setMeetings([]);
+        if (request !== listRequest.current) return;
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
       }
     }
   }, [serverAddress]);
+
+  useEffect(() => subscribeDataChanges(['meetings'], () => { void fetchMeetings(); }), [fetchMeetings]);
+
+  useEffect(() => {
+    void invoke('api_cleanup_empty_meeting_drafts').catch((error) => {
+      console.warn('Could not clean up empty workspace drafts:', error);
+    });
+  }, []);
 
   useEffect(() => {
     fetchMeetings();
@@ -183,8 +200,10 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   // Function to search through meeting transcripts
   const searchTranscripts = React.useCallback(async (query: string) => {
+    const request = ++searchRequest.current;
     if (!query.trim()) {
       setSearchResults([]);
+      setIsSearching(false);
       return;
     }
 
@@ -193,12 +212,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
 
       const results = await invoke('api_search_transcripts', { query }) as TranscriptSearchResult[];
-      setSearchResults(results);
+      if (request === searchRequest.current) setSearchResults(results);
     } catch (error) {
       console.error('Error searching transcripts:', error);
-      setSearchResults([]);
+      if (request === searchRequest.current) setSearchResults([]);
     } finally {
-      setIsSearching(false);
+      if (request === searchRequest.current) setIsSearching(false);
     }
   }, []);
 

@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { toast } from 'sonner';
 import {
   CalendarDays,
@@ -14,8 +14,7 @@ import {
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useSidebar } from './SidebarProvider';
-import { openMeetingWorkspace } from '@/lib/meeting-window';
+import { openMeetingWorkspace, readMeetingTabs } from '@/lib/meeting-window';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
 
 const mainItems = [
@@ -35,8 +34,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { t, locale } = useLanguage();
-  const { refetchMeetings } = useSidebar();
-  const [creatingMeeting, setCreatingMeeting] = useState(false);
+  const [creatingDraft, setCreatingDraft] = useState(false);
   useEffect(() => {
     warmRoutes.forEach(route => router.prefetch(route));
     if (process.env.NODE_ENV !== 'development') return;
@@ -60,25 +58,27 @@ export default function Sidebar() {
     router.push(href);
   };
 
-  const createBlankMeeting = async () => {
-    if (creatingMeeting) return;
-    setCreatingMeeting(true);
+  const openMeetingDraft = async () => {
+    if (creatingDraft) return;
+    const existing = readMeetingTabs().find((tab) => tab.source === 'calmee-draft');
+    if (existing) {
+      await openMeetingWorkspace(existing.id, url => router.push(url), existing);
+      return;
+    }
+    setCreatingDraft(true);
     try {
-      const result = await invoke<{ meeting_id: string }>('api_save_transcript', {
-        meetingTitle: t('meeting.untitled'),
-        transcripts: [],
-        folderPath: null,
-      });
-      await refetchMeetings();
-      await openMeetingWorkspace(result.meeting_id, url => router.push(url), {
-        source: 'calmee',
+      const draft = await invoke<{ meetingId: string; title: string }>('api_create_meeting_draft', {
         title: t('meeting.untitled'),
       });
+      await openMeetingWorkspace(draft.meetingId, url => router.push(url), {
+        source: 'calmee-draft',
+        title: draft.title,
+      });
     } catch (error) {
-      reportTechnicalError('meeting-create', error);
+      reportTechnicalError('meeting-draft-create', error);
       toast.error(t('meeting.createFailed'), { description: toUserFacingError(error, locale).message });
     } finally {
-      setCreatingMeeting(false);
+      setCreatingDraft(false);
     }
   };
 
@@ -109,22 +109,22 @@ export default function Sidebar() {
 
   return (
     <TooltipProvider>
-      <aside className="absolute bottom-0 left-0 top-0 z-40 flex w-20 flex-col items-center border-r border-violet-100 bg-white/95 pb-4 pt-9 shadow-[4px_0_24px_rgba(76,29,149,0.04)] backdrop-blur">
+      <aside className="relative z-40 flex h-full w-[72px] flex-col items-center border-r border-violet-100 bg-white/95 pb-4 pt-3 shadow-[4px_0_24px_rgba(76,29,149,0.04)] backdrop-blur">
         <button
           type="button"
-          onClick={() => void createBlankMeeting()}
-          disabled={creatingMeeting}
-          className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl transition-transform hover:scale-105 disabled:cursor-wait disabled:opacity-60"
+          onClick={() => void openMeetingDraft()}
+          disabled={creatingDraft}
+          className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl transition-transform hover:scale-105 disabled:cursor-wait disabled:opacity-55"
           aria-label={t('meeting.createBlank')}
           title={t('meeting.createBlank')}
         >
           <Image
             src="/calmee-awake-cat.png"
             alt="CalMee"
-            width={48}
-            height={48}
+            width={44}
+            height={44}
             priority
-            className="h-12 w-12 object-contain"
+            className="h-11 w-11 object-contain"
           />
         </button>
 

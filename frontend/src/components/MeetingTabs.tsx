@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { listen } from '@tauri-apps/api/event';
 import { CalendarDays, FileText, LayoutDashboard, Mic2, Settings, Upload, X } from 'lucide-react';
-import { meetingUrl, readMeetingTabs, removeMeetingTab, subscribeMeetingTabs } from '@/lib/meeting-window';
+import { meetingUrl, readMeetingTabs, removeMeetingTab, subscribeMeetingTabs, writeMeetingTabs } from '@/lib/meeting-window';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 const baseMeta=(route:string)=>{
@@ -21,6 +22,7 @@ const baseMeta=(route:string)=>{
 export function MeetingTabs(){
   const router=useRouter(),params=useSearchParams(),pathname=usePathname(),activeId=params.get('id');
   const { t, locale } = useLanguage();
+  const { meetings } = useSidebar();
   const isMeeting=pathname.startsWith('/meeting-details');
   // The server cannot see browser storage. Start from the same empty snapshot
   // on both server and client, then restore persisted meeting tabs after mount
@@ -29,6 +31,12 @@ export function MeetingTabs(){
   const [taskProgress,setTaskProgress]=useState<Record<string,{asr?:number;ai?:number}>>({});
   const [pendingUrl,setPendingUrl]=useState<string|null>(null);
   const [baseRoute,setBaseRoute]=useState('/');
+  useEffect(() => {
+    const current = readMeetingTabs();
+    const byId = new Map(meetings.map(meeting => [meeting.id, meeting]));
+    const next = current.map(tab => { const meeting=byId.get(tab.id); return meeting ? { ...tab, title: meeting.title, source: meeting.source } : tab; });
+    if (JSON.stringify(current) !== JSON.stringify(next)) writeMeetingTabs(next);
+  }, [meetings]);
   useEffect(()=>{
     setTabs(readMeetingTabs());
     return subscribeMeetingTabs(()=>setTabs(readMeetingTabs()));
@@ -56,11 +64,19 @@ export function MeetingTabs(){
   ]).then(items=>{if(disposed)items.forEach(item=>item());else cleanups.push(...items);});return()=>{disposed=true;cleanups.forEach(item=>item());};},[]);
   const navigate=(url:string)=>{if(pendingUrl===url)return;setPendingUrl(url);router.push(url);};
   const pointerNavigate=(event:ReactPointerEvent<HTMLElement>,url:string)=>{if(event.button!==0)return;event.preventDefault();navigate(url);};
-  const close=(id:string)=>{const wasActive=id===activeId,next=removeMeetingTab(id);setTabs(readMeetingTabs());if(wasActive)router.push(next?meetingUrl(next.id,next.source):baseRoute);};
+  const close=async(id:string)=>{
+    const tab=tabs.find(item=>item.id===id);
+    if(tab?.source==='calmee-draft'){
+      await invoke('api_discard_empty_meeting_draft',{meetingId:id}).catch(()=>false);
+    }
+    const wasActive=id===activeId,next=removeMeetingTab(id);
+    setTabs(readMeetingTabs());
+    if(wasActive)router.push(next?meetingUrl(next.id,next.source):baseRoute);
+  };
   const meta=baseMeta(baseRoute),BaseIcon=meta.icon;
-  return <div className="flex h-11 shrink-0 items-end gap-1 overflow-x-auto bg-[#e7e7eb] pl-[78px] pr-2 pt-1 select-none">
+  return <div className="flex h-11 min-w-0 items-end gap-1 overflow-x-auto bg-white/95 pl-1 pr-2 pt-1 select-none">
     <div onPointerDown={event=>pointerNavigate(event,baseRoute)} className={`calmee-browser-tab ${!isMeeting||pendingUrl===baseRoute?'calmee-browser-tab-active':'calmee-browser-tab-inactive'} flex h-10 min-w-[150px] max-w-[210px] shrink-0 cursor-pointer items-center gap-2 px-4 text-xs`}><button onClick={event=>{if(event.detail===0)navigate(baseRoute);}} className="flex min-w-0 flex-1 items-center gap-2 text-left"><BaseIcon className="h-3.5 w-3.5 shrink-0"/><span className="truncate">{t(meta.labelKey)}</span></button></div>
-    {tabs.map(tab=>{const url=meetingUrl(tab.id,tab.source),active=pendingUrl?pendingUrl===url:tab.id===activeId;const task=taskProgress[tab.id];const progress=task?.asr??task?.ai;const ai=task?.asr==null&&task?.ai!=null;const indeterminate=progress===-1;return <div key={tab.id} onPointerDown={event=>pointerNavigate(event,url)} className={`calmee-browser-tab ${active?'calmee-browser-tab-active':'calmee-browser-tab-inactive'} group flex h-10 min-w-[150px] max-w-[240px] shrink-0 cursor-pointer items-center gap-2 px-4 text-xs`}><button onClick={event=>{if(event.detail===0)navigate(url);}} className="flex min-w-0 flex-1 items-center gap-2 text-left">{progress!=null?<span className={`relative flex h-[18px] w-[18px] shrink-0 items-center justify-center ${ai?'text-violet-500':'text-slate-500'}`} title={indeterminate?(locale==='zh-CN'?(ai?'AI 正在处理':'正在转写'):(ai?'AI processing':'ASR processing')):`${ai?'AI':'ASR'} · ${Math.round(progress)}%`}><svg className={`absolute h-[18px] w-[18px] -rotate-90 ${indeterminate?'animate-spin':''}`} viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeOpacity=".16" strokeWidth="2"/><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={indeterminate?'12 35.12':'47.12'} strokeDashoffset={indeterminate?0:47.12*(1-Math.max(0,Math.min(100,progress))/100)}/></svg>{!indeterminate&&<span className="text-[6.5px] font-semibold tabular-nums">{Math.round(progress)}</span>}</span>:<FileText className="h-3.5 w-3.5 shrink-0"/>}<span className="truncate">{tab.title}</span></button><button onPointerDown={event=>event.stopPropagation()} onClick={()=>close(tab.id)} className="shrink-0 cursor-default rounded p-0.5 opacity-50 hover:bg-slate-300/60 hover:opacity-100" aria-label={t('tabs.close',{title:tab.title})}><X className="h-3 w-3"/></button></div>;})}
+    {tabs.map(tab=>{const url=meetingUrl(tab.id,tab.source),active=pendingUrl?pendingUrl===url:tab.id===activeId;const task=taskProgress[tab.id];const progress=task?.asr??task?.ai;const ai=task?.asr==null&&task?.ai!=null;const indeterminate=progress===-1;return <div key={tab.id} onPointerDown={event=>pointerNavigate(event,url)} className={`calmee-browser-tab ${active?'calmee-browser-tab-active':'calmee-browser-tab-inactive'} group flex h-10 min-w-[150px] max-w-[240px] shrink-0 cursor-pointer items-center gap-2 px-4 text-xs`}><button onClick={event=>{if(event.detail===0)navigate(url);}} className="flex min-w-0 flex-1 items-center gap-2 text-left">{progress!=null?<span className={`relative flex h-[18px] w-[18px] shrink-0 items-center justify-center ${ai?'text-violet-500':'text-slate-500'}`} title={indeterminate?(locale==='zh-CN'?(ai?'AI 正在处理':'正在转写'):(ai?'AI processing':'ASR processing')):`${ai?'AI':'ASR'} · ${Math.round(progress)}%`}><svg className={`absolute h-[18px] w-[18px] -rotate-90 ${indeterminate?'animate-spin':''}`} viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeOpacity=".16" strokeWidth="2"/><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={indeterminate?'12 35.12':'47.12'} strokeDashoffset={indeterminate?0:47.12*(1-Math.max(0,Math.min(100,progress))/100)}/></svg>{!indeterminate&&<span className="text-[6.5px] font-semibold tabular-nums">{Math.round(progress)}</span>}</span>:<FileText className="h-3.5 w-3.5 shrink-0"/>}<span className="truncate">{tab.title}</span></button><button onPointerDown={event=>event.stopPropagation()} onClick={()=>void close(tab.id)} className="shrink-0 cursor-default rounded p-0.5 opacity-50 hover:bg-slate-300/60 hover:opacity-100" aria-label={t('tabs.close',{title:tab.title})}><X className="h-3 w-3"/></button></div>;})}
     <div data-tauri-drag-region className="h-full min-w-10 flex-1"/>
   </div>;
 }

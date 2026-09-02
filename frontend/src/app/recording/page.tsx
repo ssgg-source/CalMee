@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -25,8 +25,10 @@ import { hideRecordingOverlay, showRecordingOverlay } from '@/lib/recording-over
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CalendarDays, Check, Loader2, PictureInPicture2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { CalendarLinkDialog, type LinkedCalendarEvent } from '@/components/MeetingWorkspace/CalendarLinkDialog';
+import { attachRecordingCalendar, readRecordingCalendarSelection, selectRecordingCalendar } from '@/lib/recording-calendar';
 import { reportTechnicalError, toUserFacingError } from '@/lib/feedback';
+import { clearLiveMeetingNotes, hasMeaningfulLiveMeetingNotes, readLiveMeetingNotes, writeLiveMeetingNotes, LIVE_MEETING_NOTES_EVENT } from '@/lib/live-meeting-notes';
 
 const SettingsModals = dynamic(() => import('@/app/_components/SettingsModal').then(module => module.SettingsModals), { ssr: false });
 const TranscriptRecovery = dynamic(() => import('@/components/TranscriptRecovery').then(module => module.TranscriptRecovery), { ssr: false });
@@ -35,24 +37,20 @@ const LiveMeetingNotes = dynamic(() => import('@/components/LiveMeetingNotes').t
   loading: () => <div className="mx-7 my-6 h-[calc(100%-3rem)] flex-1 animate-pulse rounded-2xl bg-muted/55" />,
 });
 
-type RecordingCalendarEvent = {
-  id: string;
-  title: string;
-  startAt: string;
-  endAt?: string;
-  calendarName?: string;
-};
-
 export default function RecordingPage() {
   const { t, locale } = useLanguage();
   // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [notesSaved, setNotesSaved] = useState(true);
+  const [notesAutoSave, setNotesAutoSave] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem('calmee.live-meeting-notes.auto-save') !== 'false';
+  });
+  const [savingNotesOnly, setSavingNotesOnly] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [calendarLoading, setCalendarLoading] = useState(false);
-  const [nearbyEvents, setNearbyEvents] = useState<RecordingCalendarEvent[]>([]);
-  const [linkedEvent, setLinkedEvent] = useState<RecordingCalendarEvent | null>(null);
+  const [linkedEvent, setLinkedEvent] = useState<LinkedCalendarEvent | null>(()=>readRecordingCalendarSelection());
+  useEffect(()=>{const sync=()=>setLinkedEvent(readRecordingCalendarSelection());window.addEventListener(LIVE_MEETING_NOTES_EVENT,sync);return()=>window.removeEventListener(LIVE_MEETING_NOTES_EVENT,sync);},[]);
 
   // Use contexts for state management
   const { meetingTitle, setMeetingTitle } = useTranscripts();
@@ -94,32 +92,10 @@ export default function RecordingPage() {
     Analytics.trackPageView('recording');
   }, []);
 
-  useEffect(() => {
-    if (!calendarOpen) return;
-    const now = Date.now();
-    const start = new Date(now - 6 * 60 * 60 * 1000);
-    const end = new Date(now + 12 * 60 * 60 * 1000);
-    setCalendarLoading(true);
-    void invoke<RecordingCalendarEvent[]>('api_get_calendar_events', {
-      startAt: start.toISOString(),
-      endAt: end.toISOString(),
-    }).then(events => {
-      setNearbyEvents([...events]
-        .sort((a, b) => Math.abs(new Date(a.startAt).getTime() - now) - Math.abs(new Date(b.startAt).getTime() - now))
-        .slice(0, 5));
-    }).catch(error => {
-      reportTechnicalError('recording-calendar-events', error);
-      toast.error(locale === 'zh-CN' ? '读取附近日程失败' : 'Could not load nearby events', {
-        description: toUserFacingError(error, locale).message,
-      });
-      setNearbyEvents([]);
-    }).finally(() => setCalendarLoading(false));
-  }, [calendarOpen, locale]);
-
-  const selectCalendarEvent = (event: RecordingCalendarEvent) => {
+  const selectCalendarEvent = (event: LinkedCalendarEvent | null) => {
     setLinkedEvent(event);
-    setMeetingTitle(event.title);
-    sessionStorage.setItem('recording_calendar_event_id', event.id);
+    selectRecordingCalendar(event);
+    if (event && (!meetingTitle.trim() || meetingTitle === '+ New Call')) setMeetingTitle(event.title);
     setCalendarOpen(false);
   };
 
@@ -137,6 +113,52 @@ export default function RecordingPage() {
     } catch (error) {
       console.warn('Failed to enter floating recording mode:', error);
       toast.error(locale === 'zh-CN' ? '无法打开录音浮窗' : 'Could not open the recording overlay');
+    }
+  };
+
+  const saveNotesOnly = async (markdown?: string) => {
+    if (savingNotesOnly) return;
+    if (markdown != null) writeLiveMeetingNotes(markdown);
+    const draft = markdown == null
+      ? readLiveMeetingNotes()
+      : { ...readLiveMeetingNotes(), markdown };
+    if (!hasMeaningfulLiveMeetingNotes(draft.markdown)) {
+      toast.info(locale === 'zh-CN' ? '写下内容后再保存' : 'Add some notes before saving');
+      return;
+    }
+    if (recordingActive) {
+      writeLiveMeetingNotes(draft.markdown);
+      toast.success(locale === 'zh-CN' ? '笔记已保存，将随录音归入会中笔记' : 'Notes saved and will be attached to this recording');
+      return;
+    }
+    setSavingNotesOnly(true);
+    try {
+      const title = meetingTitle.trim() && meetingTitle !== '+ New Call'
+        ? meetingTitle.trim()
+        : t('meeting.untitled');
+      const response = await invoke<{ meetingId: string }>('api_create_notes_only_meeting', {
+        title,
+        notesMarkdown: draft.markdown,
+        notesJson: JSON.stringify({ source: 'live-recording', ...draft }),
+      });
+      const calendarSelection=readRecordingCalendarSelection();
+      clearLiveMeetingNotes(draft);
+      try { await attachRecordingCalendar(response.meetingId,calendarSelection); } catch { toast.warning(locale==='zh-CN'?'笔记已保存，但日程尚未关联；可在会议中重试':'Notes saved, but calendar linking failed. Retry from the meeting.'); }
+      setLinkedEvent(null);
+      await refetchMeetings();
+      toast.success(locale === 'zh-CN' ? '会中笔记已保存' : 'Meeting notes saved', {
+        action: {
+          label: locale === 'zh-CN' ? '打开会议' : 'Open meeting',
+          onClick: () => void openMeetingWorkspace(response.meetingId, url => router.push(url), { title }),
+        },
+      });
+    } catch (error) {
+      reportTechnicalError('recording-save-notes-only', error);
+      toast.error(locale === 'zh-CN' ? '会中笔记保存失败' : 'Could not save meeting notes', {
+        description: toUserFacingError(error, locale).message,
+      });
+    } finally {
+      setSavingNotesOnly(false);
     }
   };
 
@@ -270,10 +292,6 @@ export default function RecordingPage() {
             value={meetingTitle === '+ New Call' ? '' : meetingTitle}
             onChange={(event) => {
               setMeetingTitle(event.target.value);
-              if (linkedEvent) {
-                setLinkedEvent(null);
-                sessionStorage.removeItem('recording_calendar_event_id');
-              }
             }}
             disabled={recordingState.isRecording}
             placeholder={t('recording.new')}
@@ -281,42 +299,19 @@ export default function RecordingPage() {
             className="w-full max-w-xl truncate border-0 bg-transparent p-0 text-[22px] font-semibold tracking-[-0.015em] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-100"
           />
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {notesSaved
-              ? (locale === 'zh-CN' ? '已自动保存笔记' : 'Notes autosaved')
-              : (locale === 'zh-CN' ? '正在保存笔记…' : 'Saving notes…')}
+            {!notesAutoSave
+              ? (locale === 'zh-CN' ? '自动保存已关闭' : 'Auto-save is off')
+              : notesSaved
+              ? (locale === 'zh-CN' ? '草稿已保存' : 'Draft saved')
+              : (locale === 'zh-CN' ? '正在保存草稿…' : 'Saving draft…')}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={`h-9 w-9 rounded-lg ${linkedEvent ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
-                title={linkedEvent
-                  ? `${locale === 'zh-CN' ? '已关联' : 'Linked'}：${linkedEvent.title}`
-                  : (locale === 'zh-CN' ? '关联附近的日程' : 'Link a nearby event')}
-              >
-                {linkedEvent ? <Check className="h-4 w-4" /> : <CalendarDays className="h-4 w-4" />}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-80 rounded-2xl p-2">
-              {calendarLoading ? (
-                <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />{locale === 'zh-CN' ? '正在读取日程…' : 'Loading events…'}</div>
-              ) : nearbyEvents.length ? (
-                <div className="space-y-1">
-                  {nearbyEvents.map(event => (
-                    <button key={event.id} type="button" onClick={() => selectCalendarEvent(event)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-violet-50">
-                      <span className="w-11 shrink-0 text-xs font-medium tabular-nums text-violet-600">{new Date(event.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      <span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-700">{event.title}</span><span className="block truncate text-[11px] text-slate-400">{event.calendarName || (locale === 'zh-CN' ? '本机日历' : 'Calendar')}</span></span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 text-center text-xs text-slate-400">{locale === 'zh-CN' ? '附近没有日程' : 'No nearby events'}</div>
-              )}
-            </PopoverContent>
-          </Popover>
+          <Button variant="ghost" size="icon" onClick={()=>setCalendarOpen(true)} className={`h-9 w-9 rounded-lg ${linkedEvent?'bg-primary/10 text-primary':'text-muted-foreground'}`} title={linkedEvent ? `${locale==='zh-CN'?'已选择日程':'Selected event'}：${linkedEvent.title}` : (locale==='zh-CN'?'关联日程':'Link calendar event')}>
+            {linkedEvent?<Check className="h-4 w-4"/>:<CalendarDays className="h-4 w-4"/>}
+          </Button>
+          <CalendarLinkDialog open={calendarOpen} onOpenChange={setCalendarOpen} meetingTitle={meetingTitle} currentEventId={linkedEvent?.id} onLinked={selectCalendarEvent}/>
+
           {status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
             status !== RecordingStatus.SAVING && (
               <RecordingControls
@@ -354,6 +349,9 @@ export default function RecordingPage() {
           <LiveMeetingNotes
             currentTime={recordingState.activeDuration || 0}
             onSaveStateChange={setNotesSaved}
+            onAutoSaveChange={setNotesAutoSave}
+            onSave={saveNotesOnly}
+            saving={savingNotesOnly}
           />
         </div>
 

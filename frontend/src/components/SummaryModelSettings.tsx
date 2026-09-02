@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import { toast } from 'sonner';
-import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
+import type { ModelConfig } from '@/components/ModelSettingsModal';
+import { AiModelSelectionSettings } from '@/components/AiModelSelectionSettings';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -184,17 +185,15 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
   return (
     <div className="space-y-7 pb-6">
       <section>
-        <h3 className="mb-1 text-lg font-semibold">{lt('Summary Model Configuration')}</h3>
+        <h3 className="mb-1 text-lg font-semibold">{zh ? 'AI 模型管理' : 'AI model management'}</h3>
         <p className="mb-5 text-sm text-gray-600">
-          {lt('Configure the AI model used for generating meeting summaries.')}
+          {zh ? '管理 Qwen、Gemma 本地模型和多个云端连接。这里选择的模型会作为生成会议内容的默认项。' : 'Manage local Qwen and Gemma models plus multiple cloud connections. The selected model becomes the default for meeting generation.'}
         </p>
 
-        <ModelSettingsModal
+        <AiModelSelectionSettings
           modelConfig={modelConfig}
-          setModelConfig={setModelConfig}
+          setModelConfig={config => setModelConfig(config)}
           onSave={handleSaveModelConfig}
-          skipInitialFetch={true}
-          compact={true}
         />
       </section>
 

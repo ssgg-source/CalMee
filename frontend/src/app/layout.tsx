@@ -8,7 +8,7 @@ import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { Suspense, useState, useEffect, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/data-invoke'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
 import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
@@ -29,6 +29,7 @@ import { reportTechnicalError, toUserFacingError } from '@/lib/feedback'
 import { usePathname } from 'next/navigation'
 import { appCacheDir, join } from '@tauri-apps/api/path'
 import { mkdir, writeFile } from '@tauri-apps/plugin-fs'
+import { startDataChangeBridge } from '@/lib/data-events'
 
 type DatabaseStartupStatus =
   | { status: 'initializing' }
@@ -95,12 +96,16 @@ function AppFrame({ children }: { children: React.ReactNode }) {
     return <div className="h-screen overflow-hidden bg-transparent">{children}</div>
   }
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#f8f7fb]">
-      <Suspense fallback={<div className="h-11 shrink-0 bg-[#e7e7eb]" />}>
-        <MeetingTabs />
-      </Suspense>
-      <div className="min-h-0 flex-1 overflow-hidden [&>div]:!h-full">
-        <div className="flex h-full"><Sidebar /><MainContent>{children}</MainContent></div>
+    <div className="grid h-screen grid-rows-[44px_minmax(0,1fr)] overflow-hidden bg-[#f8f7fb]">
+      <header className="grid grid-cols-[72px_minmax(0,1fr)] bg-white/95 backdrop-blur">
+        <div data-tauri-drag-region className="bg-white/95 backdrop-blur" aria-hidden="true" />
+        <Suspense fallback={<div className="h-11 bg-white/95" />}>
+          <MeetingTabs />
+        </Suspense>
+      </header>
+      <div className="grid min-h-0 grid-cols-[72px_minmax(0,1fr)] overflow-hidden">
+        <Sidebar />
+        <MainContent>{children}</MainContent>
       </div>
     </div>
   )
@@ -150,6 +155,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
+  useEffect(startDataChangeBridge, [])
   const [databaseStartup, setDatabaseStartup] = useState<DatabaseStartupStatus | null>(null)
   const [showStartupWait, setShowStartupWait] = useState(false)
 

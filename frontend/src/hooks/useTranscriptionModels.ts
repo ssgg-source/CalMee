@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 
 export interface RawModelInfo {
   name: string;
@@ -14,6 +14,8 @@ export interface ModelOption {
   size_mb: number;
   capabilities: TranscriptionCapability[];
   languages: string;
+  profileId?: string;
+  remoteModel?: string;
 }
 
 export type TranscriptionCapability =
@@ -132,17 +134,17 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     }
 
     try {
-      const profile = await invoke<{ model?: string; credentials?: Record<string, string> }>('api_get_transcript_provider_credentials', { provider: 'funasr-server' });
-      if (profile.model && profile.credentials?.endpoint) {
-        allModels.push({
-          provider: 'funasr-server',
-          name: profile.model,
-          displayName: `🌐 FunASR Server: ${profile.model}`,
+      const profiles = await invoke<Array<{id:string;displayName:string;model:string;endpoint:string}>>('api_list_custom_model_profiles', { kind: 'transcription' });
+      allModels.push(...profiles.map(profile => ({
+          provider: 'funasr-server' as const,
+          name: profile.id,
+          displayName: `${profile.displayName}: ${profile.model}`,
           size_mb: 0,
-          capabilities: ['timestamps', 'multilingual', 'punctuation', 'itn'],
+          capabilities: ['timestamps', 'multilingual', 'punctuation', 'itn'] as TranscriptionCapability[],
           languages: 'Server-defined',
-        });
-      }
+          profileId: profile.id,
+          remoteModel: profile.model,
+        })));
     } catch (err) {
       console.error('Failed to fetch FunASR server configuration:', err);
     }
@@ -161,7 +163,7 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
         (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel) ||
         (configuredProvider === 'funasr' && m.provider === 'funasr' && m.name === configuredModel) ||
         (configuredProvider === 'qwen3asr' && m.provider === 'qwen3asr' && m.name === configuredModel) ||
-        (configuredProvider === 'funasr-server' && m.provider === 'funasr-server' && m.name === configuredModel)
+        (configuredProvider === 'funasr-server' && m.provider === 'funasr-server' && m.remoteModel === configuredModel)
     );
 
     // Only set default model if user hasn't manually selected one

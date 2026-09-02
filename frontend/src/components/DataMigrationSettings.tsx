@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/data-invoke";
 import { AlertTriangle, CheckCircle2, Database, FileSearch, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsSection } from "@/components/layout/ProductPage";

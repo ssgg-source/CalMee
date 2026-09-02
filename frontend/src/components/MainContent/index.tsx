@@ -8,7 +8,7 @@ interface MainContentProps {
 
 const MainContent: React.FC<MainContentProps> = ({ children }) => {
   return (
-    <main className="ml-20 h-full min-w-0 flex-1 overflow-hidden bg-[#f8f7fb] [&>div]:!h-full">
+    <main className="h-full min-w-0 overflow-hidden bg-[#f8f7fb] [&>div]:!h-full">
       {children}
     </main>
   );

@@ -74,7 +74,7 @@ impl SummaryProcessesRepository {
             .execute(&mut *transaction)
             .await?;
 
-        sqlx::query("UPDATE meetings SET updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE meetings SET updated_at = ?, source=CASE WHEN source='calmee-draft' THEN 'calmee' ELSE source END WHERE id = ?")
             .bind(now)
             .bind(meeting_id)
             .execute(&mut *transaction)

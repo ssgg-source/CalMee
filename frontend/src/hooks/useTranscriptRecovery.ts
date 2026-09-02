@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
 import {
   getStoredTranscriptSequenceId,
   indexedDBService,

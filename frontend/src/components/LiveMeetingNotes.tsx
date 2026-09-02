@@ -24,7 +24,13 @@ import {
   Underline,
   Strikethrough,
   ChevronDown,
+  Cloud,
+  CloudOff,
+  Copy,
+  Save,
+  Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useLanguage } from "@/contexts/LanguageContext";
 import {
   LIVE_MEETING_NOTES_EVENT,
@@ -32,9 +38,11 @@ import {
   LIVE_MEETING_NOTES_KEY,
   readLiveMeetingNotes,
   writeLiveMeetingNotes,
+  hasMeaningfulLiveMeetingNotes,
   type LiveMeetingNotesState,
 } from "@/lib/live-meeting-notes";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import type { UnifiedMarkdownEditorRef } from "@/components/MeetingWorkspace/UnifiedMarkdownEditor";
 import {
   DropdownMenu,
@@ -59,15 +67,27 @@ export function LiveMeetingNotes({
   currentTime = 0,
   compact = false,
   onSaveStateChange,
+  onAutoSaveChange,
+  onContentChange,
+  onSave,
+  saving = false,
 }: {
   currentTime?: number;
   compact?: boolean;
   onSaveStateChange?: (saved: boolean) => void;
+  onAutoSaveChange?: (enabled: boolean) => void;
+  onContentChange?: (hasContent: boolean) => void;
+  onSave?: (markdown: string) => Promise<void>;
+  saving?: boolean;
 }) {
   const { locale } = useLanguage();
   const zh = locale === "zh-CN";
-  const [notes, setNotes] = useState(() => readLiveMeetingNotes().markdown);
-  const [saved, setSaved] = useState(true);
+  const [notes, setNotes] = useState(() => (typeof window !== 'undefined' ? sessionStorage.getItem('calmee.live-notes-conflict') : null) ?? readLiveMeetingNotes().markdown);
+  const [saved, setSaved] = useState(() => typeof window === 'undefined' || sessionStorage.getItem('calmee.live-notes-conflict') === null);
+  const [autoSave, setAutoSave] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("calmee.live-meeting-notes.auto-save") !== "false";
+  });
   const [editorMode, setEditorMode] = useState<"rich" | "markdown">("rich");
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
@@ -76,11 +96,29 @@ export function LiveMeetingNotes({
   const localEditRef = useRef(false);
   const notesRef = useRef(notes);
   const composingRef = useRef(false);
+  const baseRevisionRef = useRef(readLiveMeetingNotes());
+  const [syncConflict, setSyncConflict] = useState(() => typeof window !== 'undefined' && sessionStorage.getItem('calmee.live-notes-conflict') !== null);
+  const conflictRef = useRef(syncConflict);
+  const writeDraft = (markdown: string) => {
+    const result = writeLiveMeetingNotes(markdown, baseRevisionRef.current);
+    if (result === false) { sessionStorage.setItem('calmee.live-notes-conflict', markdown); conflictRef.current = true; setSyncConflict(true); setSaved(false); return false; }
+    baseRevisionRef.current = readLiveMeetingNotes();
+    return true;
+  };
 
   useEffect(() => {
     const sync = (value?: LiveMeetingNotesState) => {
-      if (localEditRef.current) return;
-      const markdown = value?.markdown ?? readLiveMeetingNotes().markdown;
+      // Read the authoritative shared snapshot; queued channel payloads may be old.
+      const latest = readLiveMeetingNotes();
+      if (conflictRef.current) return;
+      if (latest.sessionId === baseRevisionRef.current.sessionId && latest.revision === baseRevisionRef.current.revision) return;
+      if (localEditRef.current) {
+        if (latest.markdown === notesRef.current) { baseRevisionRef.current = latest; return; }
+        sessionStorage.setItem('calmee.live-notes-conflict', notesRef.current);
+        conflictRef.current = true; setSyncConflict(true); setSaved(false); return;
+      }
+      baseRevisionRef.current = latest;
+      const markdown = latest.markdown;
       notesRef.current = markdown;
       setNotes(markdown);
       void editorRef.current?.setMarkdown(markdown);
@@ -109,23 +147,32 @@ export function LiveMeetingNotes({
   }, [notes]);
 
   useEffect(() => () => {
-    if (localEditRef.current) writeLiveMeetingNotes(notesRef.current);
-  }, []);
+    if (autoSave && localEditRef.current && !conflictRef.current) writeDraft(notesRef.current);
+  }, [autoSave]);
 
   useEffect(() => {
-    if (!localEditRef.current) return;
+    if (!autoSave || !localEditRef.current || syncConflict) return;
     setSaved(false);
     const timer = window.setTimeout(() => {
-      writeLiveMeetingNotes(notes);
+      if (!writeDraft(notes)) return;
       localEditRef.current = false;
       setSaved(true);
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [notes]);
+  }, [autoSave, notes, syncConflict]);
+
+  useEffect(() => {
+    window.localStorage.setItem("calmee.live-meeting-notes.auto-save", String(autoSave));
+    onAutoSaveChange?.(autoSave);
+  }, [autoSave, onAutoSaveChange]);
 
   useEffect(() => {
     onSaveStateChange?.(saved);
   }, [onSaveStateChange, saved]);
+
+  useEffect(() => {
+    onContentChange?.(hasMeaningfulLiveMeetingNotes(notes));
+  }, [notes, onContentChange]);
 
   const insertIntoTextarea = (marker: string) => {
     const element = textareaRef.current;
@@ -168,10 +215,38 @@ export function LiveMeetingNotes({
 
   const updateNotes = (value: string) => {
     localEditRef.current = true;
+    if (conflictRef.current) sessionStorage.setItem('calmee.live-notes-conflict', value);
     setNotes(value);
   };
 
   const handleChange = (value: string) => updateNotes(value);
+
+  const toggleAutoSave = () => {
+    setAutoSave((current) => {
+      const next = !current;
+      if (next && localEditRef.current) {
+        if (!writeDraft(notesRef.current)) return next;
+        localEditRef.current = false;
+        setSaved(true);
+      }
+      return next;
+    });
+  };
+
+  const saveNow = async () => {
+    if (!hasMeaningfulLiveMeetingNotes(notesRef.current) || saving) return;
+    if (conflictRef.current) return;
+    if (!writeDraft(notesRef.current)) return;
+    localEditRef.current = false;
+    setSaved(true);
+    await onSave?.(notesRef.current);
+  };
+
+  const copyNotes = async () => {
+    if (!hasMeaningfulLiveMeetingNotes(notesRef.current)) return;
+    await navigator.clipboard.writeText(notesRef.current);
+    toast.success(zh ? "会中笔记已复制" : "Meeting notes copied");
+  };
 
   const ensureInitialTimestamp = () => {
     if (notes.trim()) return;
@@ -207,6 +282,13 @@ export function LiveMeetingNotes({
           : "flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
       }
     >
+      {syncConflict && <div role="status" className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+        <p>{zh ? '其他窗口更新了笔记。本窗口草稿已保留，自动保存已暂停。请先复制需要保留的内容。' : 'Another window updated the notes. This draft is preserved and auto-save is paused. Copy any text you want to keep first.'}</p>
+        <div className="mt-2 flex gap-3">
+          <button type="button" onClick={() => void copyNotes()}>{zh ? '复制本窗口笔记' : 'Copy this draft'}</button>
+          <button type="button" onClick={() => { const latest=readLiveMeetingNotes(); baseRevisionRef.current=latest; notesRef.current=latest.markdown; localEditRef.current=false; conflictRef.current=false; sessionStorage.removeItem('calmee.live-notes-conflict'); setSyncConflict(false); setNotes(latest.markdown); void editorRef.current?.setMarkdown(latest.markdown); setSaved(true); }}>{zh ? '放弃本窗口草稿，采用最新笔记' : 'Discard this draft and use latest notes'}</button>
+        </div>
+      </div>}
       {compact ? (
         <div className="flex items-center gap-2 pb-2">
           <NotebookPen className="h-4 w-4 text-violet-500" />
@@ -287,30 +369,49 @@ export function LiveMeetingNotes({
             <BookmarkPlus className="h-4 w-4" />
           </Button>
           <span className="min-w-2 flex-1" />
-          <div className="calmee-editor-mode-switch" aria-label={zh ? "编辑模式" : "Editor mode"}>
-            <button
-              type="button"
-              aria-label={zh ? "所见即所得" : "Visual editor"}
-              aria-pressed={editorMode === "rich"}
-              onClick={() => setEditorMode("rich")}
-              className={`calmee-editor-mode-button ${editorMode === "rich" ? "is-active" : ""}`}
+          <ButtonGroup>
+            <Button
+              variant="outline"
+              size="icon"
+              className={`h-9 w-9 ${autoSave ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-slate-500"}`}
+              onClick={toggleAutoSave}
+              title={autoSave ? (zh ? "自动保存已开启" : "Auto-save is on") : (zh ? "自动保存已关闭" : "Auto-save is off")}
+              aria-pressed={autoSave}
             >
-              <PanelTop className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label="Markdown"
-              aria-pressed={editorMode === "markdown"}
-              onClick={() => setEditorMode("markdown")}
-              className={`calmee-editor-mode-button ${editorMode === "markdown" ? "is-active" : ""}`}
+              {autoSave ? <Cloud className="h-4 w-4" /> : <CloudOff className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => void saveNow()}
+              disabled={!hasMeaningfulLiveMeetingNotes(notes) || saving}
+              title={zh ? "保存为会中笔记" : "Save as meeting notes"}
             >
-              <Code2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => void copyNotes()}
+              disabled={!hasMeaningfulLiveMeetingNotes(notes)}
+              title={zh ? "复制" : "Copy"}
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          </ButtonGroup>
         </div>
       )}
+      <div className="relative min-h-0 flex-1">
+        {!compact && (
+          <div className="calmee-editor-mode-switch absolute right-4 top-3 z-10 shadow-sm" aria-label={zh ? "编辑模式" : "Editor mode"}>
+            <button type="button" aria-label={zh ? "所见即所得" : "Visual editor"} aria-pressed={editorMode === "rich"} onClick={() => setEditorMode("rich")} className={`calmee-editor-mode-button ${editorMode === "rich" ? "is-active" : ""}`}><PanelTop className="h-3.5 w-3.5" /></button>
+            <button type="button" aria-label="Markdown" aria-pressed={editorMode === "markdown"} onClick={() => setEditorMode("markdown")} className={`calmee-editor-mode-button ${editorMode === "markdown" ? "is-active" : ""}`}><Code2 className="h-3.5 w-3.5" /></button>
+          </div>
+        )}
       {editorMode === "rich" ? (
-        <div className="min-h-0 flex-1">
+        <div className="h-full min-h-0">
           <Suspense fallback={<div className="h-full animate-pulse bg-slate-50" />}>
             <UnifiedMarkdownEditor
               ref={editorRef}
@@ -336,9 +437,10 @@ export function LiveMeetingNotes({
               ? "记录讨论要点、决定和待办；Enter 新建时间点，Shift+Enter 换行…"
               : "Capture discussion points, decisions, and actions; Enter adds a timestamp, Shift+Enter adds a line…"
           }
-          className={`calmee-markdown-source min-h-0 flex-1 resize-none border-0 bg-transparent outline-none ${compact ? "px-2 py-2" : "px-12 py-8"}`}
+          className={`calmee-markdown-source h-full min-h-0 w-full resize-none border-0 bg-transparent outline-none ${compact ? "px-2 py-2" : "px-12 py-8"}`}
         />
       )}
+      </div>
       <ProductPromptDialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen} title={zh ? "添加链接" : "Add link"} description={zh ? "链接将应用到当前选中的文字。" : "The link will be applied to the selected text."} value={linkValue} onValueChange={setLinkValue} placeholder="https://" confirmLabel={zh ? "添加" : "Add"} cancelLabel={zh ? "取消" : "Cancel"} onConfirm={()=>{editorRef.current?.runCommand("link",linkValue.trim());setLinkDialogOpen(false);}} />
     </section>
   );

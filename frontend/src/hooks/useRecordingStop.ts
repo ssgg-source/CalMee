@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/data-invoke';
+import { attachRecordingCalendar, readRecordingCalendarSelection, selectRecordingCalendar } from '@/lib/recording-calendar';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -314,6 +315,7 @@ export function useRecordingStop(
           console.log('   Transcripts:', freshTranscripts.length);
           console.log('   folder_path:', folderPath);
 
+          const selectedCalendar=readRecordingCalendarSelection();
           try {
             await persistLiveMeetingNotes(meetingId);
           } catch (error) {
@@ -323,13 +325,9 @@ export function useRecordingStop(
             });
           }
 
-          const calendarEventId = sessionStorage.getItem('recording_calendar_event_id');
-          if (calendarEventId) {
+          if (selectedCalendar) {
             try {
-              await invoke('api_link_meeting_calendar_event', {
-                meetingId,
-                eventId: calendarEventId,
-              });
+              await attachRecordingCalendar(meetingId,selectedCalendar);
             } catch (error) {
               console.warn('Failed to link recording to calendar event:', error);
               toast.warning(zh ? '会议已保存，但日程尚未关联' : 'Meeting saved, but the calendar event was not linked');
@@ -468,6 +466,7 @@ export function useRecordingStop(
       sessionStorage.removeItem('recording_live_transcription');
       sessionStorage.removeItem('recording_live_transcription_is_preview');
       sessionStorage.removeItem('recording_calendar_event_id');
+      selectRecordingCalendar(null);
       // Always reset the guard flag when done
       stopInProgressRef.current = false;
     }
